@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Zoom17">
+  <title>Zoom17</title>
+  <rect width="64" height="64" rx="15" fill="#16277B"/>
+  <g fill="none" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M23 17 H43 L23 38 H43" stroke="#FFFFFF"/>
+    <path d="M14 46 C 20 56, 37 59, 47 48" stroke="#1A6CFF"/>
+  </g>
+</svg>
