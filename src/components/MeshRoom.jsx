@@ -553,7 +553,7 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
     }
     try {
       const status = await api.aiStatus()
-      if (!status.available) return toast('AI Notes needs AI_TRANSCRIPTION_URL in Dokploy', 'info')
+      if (!status.available) return toast('AI Notes needs AI_TRANSCRIPTION_URL set on the server', 'info')
       aiNotesRef.current = true
       setAiTakingNotes(true)
       if (!recording) toggleRecord()

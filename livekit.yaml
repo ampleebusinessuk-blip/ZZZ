@@ -1,5 +1,5 @@
 # LiveKit SFU server config. API keys are injected via the LIVEKIT_KEYS env var
-# (set in Dokploy → Environment) so no secret lives in the repo.
+# (set in Coolify → Environment) so no secret lives in the repo.
 port: 7880
 rtc:
   tcp_port: 7881

@@ -19,7 +19,7 @@ export const config = {
   turn: {
     urls: (process.env.TURN_URLS || '').split(',').map((u) => u.trim()).filter(Boolean),
     // Keep the bundled relay usable when a separate TURN secret has not yet
-    // been supplied in Dokploy.
+    // been supplied in Coolify.
     secret: process.env.TURN_SECRET || process.env.JWT_SECRET || '',
     username: process.env.TURN_USERNAME || '',
     password: process.env.TURN_PASSWORD || '',
@@ -31,7 +31,7 @@ export const config = {
   // LiveKit SFU (optional). When all three are set, the meeting room uses LiveKit;
   // otherwise it automatically falls back to the built-in peer-to-peer mesh.
   livekit: {
-    url: process.env.LIVEKIT_URL || '',        // e.g. wss://livekit.aethelonglobal.io
+    url: process.env.LIVEKIT_URL || '',        // e.g. wss://livekit.no17.ai
     apiKey: process.env.LIVEKIT_API_KEY || '',
     apiSecret: process.env.LIVEKIT_API_SECRET || '',
   },

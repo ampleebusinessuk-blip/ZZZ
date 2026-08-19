@@ -423,7 +423,7 @@ router.get('/ai/status', (_req, res) => {
 router.post('/media/:id/ai-notes', (req, res) => {
   const row = q.mediaById.get(req.params.id)
   if (!row || row.user_id !== req.user.id || row.kind !== 'recording') return res.status(404).json({ error: 'Recording not found' })
-  if (!config.ai.transcriptionUrl) return res.status(503).json({ error: 'AI notes are not configured yet. Add AI_TRANSCRIPTION_URL in Dokploy.' })
+  if (!config.ai.transcriptionUrl) return res.status(503).json({ error: 'AI notes are not configured yet. Add AI_TRANSCRIPTION_URL to the server environment.' })
   if (aiJobs.has(row.id)) return res.status(202).json(mediaRow(row))
 
   aiJobs.add(row.id)
