@@ -82,7 +82,9 @@ services:
   turn:
     image: coturn/coturn:4.6
     network_mode: host        # coturn needs the real client IP and a UDP port range
-    command: >
+    # `>-` not `>`: the folded block otherwise ends with a newline that coturn
+    # parses as a blank flag and rejects with "CONFIG: Unknown argument:".
+    command: >-
       -n --log-file=stdout
       --realm=${TURN_REALM:-zoom17}
       --use-auth-secret --static-auth-secret=${TURN_SECRET:-${JWT_SECRET}}
