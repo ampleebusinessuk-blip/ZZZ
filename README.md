@@ -58,10 +58,11 @@ TURN_URLS=turn:turn.example.com:3478,turns:turn.example.com:5349
 TURN_SECRET=<a long random string>
 ```
 
-The bundled Dokploy Compose deployment defaults `TURN_URLS` to
-`meet.aethelonglobal.io:3478` and uses `JWT_SECRET` for relay authentication
-until a separate `TURN_SECRET` is supplied. Setting `TURN_SECRET` remains the
-recommended production configuration and overrides that fallback.
+The bundled Compose deployment runs a coturn relay but sets no default
+`TURN_URLS` — point it at your own host. An unreachable relay is worse than
+none, because calls hang on "connecting" instead of failing fast. `JWT_SECRET`
+is used for relay authentication until a separate `TURN_SECRET` is supplied;
+setting `TURN_SECRET` remains the recommended production configuration.
 
 `compose.yaml` includes a `coturn` service that reads the same `TURN_SECRET`.
 Point a DNS record at your host and open these ports:
@@ -118,7 +119,7 @@ Register a new account with a password of 12+ characters containing uppercase, l
 
 The Compose stack includes the open-source Speaches speech-to-text service and
 connects it automatically at `http://speaches:8000`. You only need these
-Dokploy environment values when overriding the built-in service or model:
+Coolify environment values when overriding the built-in service or model:
 
 ```bash
 AI_TRANSCRIPTION_URL=http://speaches:8000
@@ -145,7 +146,7 @@ docker compose up --build
 
 The `web` container (nginx) serves the built front-end and proxies `/api` + `/ws` to the `server` container; SQLite persists in the `db-data` volume.
 
-> Deployed via **Dokploy** (Compose): the `web` service joins the external `dokploy-network` so Traefik can route your domain to it. Set `JWT_SECRET` in the Dokploy **Environment** tab, and point a domain at service `web` port `80` in the **Domains** tab.
+> Deployed via **Coolify** (Compose): the `web` service declares `SERVICE_FQDN_WEB_80`, so Coolify assigns the domain and routes it to container port `80`. Set `JWT_SECRET` and `TURN_SECRET` in the Coolify **Environment** tab, then assign your domain to service `web`.
 
 ## Environment
 
