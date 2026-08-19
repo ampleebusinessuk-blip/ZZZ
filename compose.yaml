@@ -1,0 +1,114 @@
+# Dokploy Compose deployment for the Zoom17 full-stack app.
+#
+# Routing: the `web` service (nginx) is attached to the external `dokploy-network`
+# so Dokploy's Traefik can route a Domain to it. In the Dokploy UI → Domains tab,
+# point your domain at service "web", container port 80.
+#
+# Secrets: set JWT_SECRET (and, for LiveKit, LIVEKIT_* + LIVEKIT_KEYS) in the
+# Dokploy UI → Environment tab.
+#
+# nginx serves the built front-end and proxies /api and /ws to the `server`
+# service over the private `internal` network.
+#
+# LiveKit (optional SFU): the `livekit` service provides scalable video. When the
+# server's LIVEKIT_URL/API_KEY/API_SECRET are set, meetings use it; otherwise the
+# app automatically falls back to peer-to-peer mesh video (no LiveKit required).
+
+services:
+  server:
+    build:
+      context: ./server
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      - JWT_SECRET=${JWT_SECRET}
+      - SESSION_DAYS=${SESSION_DAYS:-7}
+      - DB_PATH=/data/app.db
+      - CORS_ORIGIN=${CORS_ORIGIN:-*}
+      - TURN_URLS=${TURN_URLS:-turn:meet.aethelonglobal.io:3478?transport=udp,turn:meet.aethelonglobal.io:3478?transport=tcp}
+      - TURN_SECRET=${TURN_SECRET:-${JWT_SECRET}}
+      - LIVEKIT_URL=${LIVEKIT_URL:-}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:-}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:-}
+      - AI_TRANSCRIPTION_URL=${AI_TRANSCRIPTION_URL:-http://speaches:8000}
+      - AI_TRANSCRIPTION_MODEL=${AI_TRANSCRIPTION_MODEL:-Systran/faster-whisper-small}
+      - AI_SUMMARY_URL=${AI_SUMMARY_URL:-}
+      - AI_SUMMARY_MODEL=${AI_SUMMARY_MODEL:-qwen2.5:3b}
+    volumes:
+      - db-data:/data
+    networks:
+      - internal
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+    depends_on:
+      - server
+    networks:
+      - internal        # to reach the API/WebSocket service
+      - dokploy-network  # so Traefik can route your Domain here
+    restart: unless-stopped
+
+  # --- TURN relay (coturn) ---
+  # Mesh video needs this the moment two people are on different networks. STUN
+  # only discovers a public address; when either side is behind a symmetric NAT
+  # or a firewall that blocks UDP, the call completes signalling and then sits on
+  # "connecting" forever because there is no path for the media.
+  #
+  # Set TURN_SECRET to a long random string and TURN_URLS to your own host, e.g.
+  #   TURN_URLS=turn:turn.example.com:3478,turns:turn.example.com:5349
+  # Port 5349 (TLS) matters: it is the one that survives restrictive networks
+  # which block plain UDP. The server mints short-lived credentials from the
+  # shared secret, so nothing long-lived is handed to the browser.
+  turn:
+    image: coturn/coturn:4.6
+    network_mode: host        # coturn needs the real client IP and a UDP port range
+    command: >
+      -n --log-file=stdout
+      --realm=${TURN_REALM:-zoom17}
+      --use-auth-secret --static-auth-secret=${TURN_SECRET:-${JWT_SECRET}}
+      --min-port=49160 --max-port=49200
+      --no-cli --no-tlsv1 --no-tlsv1_1
+      --external-ip=$$(detect-external-ip)
+    restart: unless-stopped
+
+  # OpenAI-compatible, self-hosted speech-to-text. The model is downloaded on
+  # first use and cached in this volume. Set AI_TRANSCRIPTION_URL to
+  # http://speaches:8000 in Dokploy to enable the AI Notes buttons.
+  speaches:
+    image: ghcr.io/speaches-ai/speaches:latest-cpu
+    volumes:
+      - ai-models:/home/ubuntu/.cache/huggingface/hub
+    networks:
+      - internal
+    restart: unless-stopped
+
+  # --- LiveKit SFU (enable once LIVEKIT_KEYS is set in the Environment tab) ---
+  # Uncomment this service AFTER setting LIVEKIT_KEYS, then redeploy. Also add a
+  # Domain in Dokploy pointing at service "livekit" port 7880 (HTTPS/wss), and set
+  # LIVEKIT_URL/LIVEKIT_API_KEY/LIVEKIT_API_SECRET so the server mints tokens.
+  # Until then the app uses peer-to-peer mesh video automatically.
+  # livekit:
+  #   image: livekit/livekit-server:v1.8
+  #   command: --config /etc/livekit/livekit.yaml
+  #   volumes:
+  #     - ./livekit.yaml:/etc/livekit/livekit.yaml:ro
+  #   environment:
+  #     - LIVEKIT_KEYS=${LIVEKIT_KEYS:-}
+  #   ports:
+  #     - "7881:7881"        # RTC over TCP (fallback)
+  #     - "7882:7882/udp"    # RTC over UDP (muxed)
+  #   networks:
+  #     - internal
+  #     - dokploy-network
+  #   restart: unless-stopped
+
+networks:
+  internal:
+  dokploy-network:
+    external: true
+
+volumes:
+  db-data:
+  ai-models:
