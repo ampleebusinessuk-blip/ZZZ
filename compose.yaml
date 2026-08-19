@@ -71,6 +71,14 @@ services:
   # Port 5349 (TLS) matters: it is the one that survives restrictive networks
   # which block plain UDP. The server mints short-lived credentials from the
   # shared secret, so nothing long-lived is handed to the browser.
+  # TURN_PUBLIC_IP must be set to this server's public IPv4 address. Without it
+  # coturn auto-discovers every interface and hands out relay candidates on the
+  # Docker bridge ranges (10.0.x.x), which no remote peer can route to — the
+  # allocation succeeds and then dies, and the call never connects.
+  #
+  # This is pinned explicitly rather than via `--external-ip=$(detect-external-ip)`
+  # because Docker does not run `command:` through a shell, so that substitution
+  # is silently dropped and coturn falls back to discovering everything.
   turn:
     image: coturn/coturn:4.6
     network_mode: host        # coturn needs the real client IP and a UDP port range
@@ -78,9 +86,12 @@ services:
       -n --log-file=stdout
       --realm=${TURN_REALM:-zoom17}
       --use-auth-secret --static-auth-secret=${TURN_SECRET:-${JWT_SECRET}}
+      --listening-ip=${TURN_PUBLIC_IP}
+      --relay-ip=${TURN_PUBLIC_IP}
+      --external-ip=${TURN_PUBLIC_IP}
       --min-port=49160 --max-port=49200
       --no-cli --no-tlsv1 --no-tlsv1_1
-      --external-ip=$$(detect-external-ip)
+      --no-multicast-peers
     restart: unless-stopped
 
   # OpenAI-compatible, self-hosted speech-to-text. The model is downloaded on
