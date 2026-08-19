@@ -1,11 +1,12 @@
-# Dokploy Compose deployment for the Zoom17 full-stack app.
+# Coolify Compose deployment for the Zoom17 full-stack app.
 #
-# Routing: the `web` service (nginx) is attached to the external `dokploy-network`
-# so Dokploy's Traefik can route a Domain to it. In the Dokploy UI → Domains tab,
-# point your domain at service "web", container port 80.
+# Routing: Coolify attaches its own proxy network and generates Traefik labels,
+# so no external network is declared here. The `web` service (nginx) publishes
+# SERVICE_FQDN_WEB_80 — Coolify fills that in with the domain you assign to the
+# service, and routes it to container port 80.
 #
-# Secrets: set JWT_SECRET (and, for LiveKit, LIVEKIT_* + LIVEKIT_KEYS) in the
-# Dokploy UI → Environment tab.
+# Secrets: set JWT_SECRET and TURN_SECRET (and, for LiveKit, LIVEKIT_*) in the
+# Coolify UI → Environment tab. Both must be long random strings.
 #
 # nginx serves the built front-end and proxies /api and /ws to the `server`
 # service over the private `internal` network.
@@ -24,8 +25,14 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - SESSION_DAYS=${SESSION_DAYS:-7}
       - DB_PATH=/data/app.db
+      # Same-origin in this layout (nginx proxies /api and /ws), so the default
+      # is safe. Override only if you serve the API from another hostname.
       - CORS_ORIGIN=${CORS_ORIGIN:-*}
-      - TURN_URLS=${TURN_URLS:-turn:meet.aethelonglobal.io:3478?transport=udp,turn:meet.aethelonglobal.io:3478?transport=tcp}
+      # No default host here on purpose: a stale TURN address is worse than none,
+      # because calls sit on "connecting" instead of failing fast. Set this to
+      # your own coturn host, e.g.
+      #   TURN_URLS=turn:turn.example.com:3478,turns:turn.example.com:5349
+      - TURN_URLS=${TURN_URLS:-}
       - TURN_SECRET=${TURN_SECRET:-${JWT_SECRET}}
       - LIVEKIT_URL=${LIVEKIT_URL:-}
       - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:-}
@@ -43,11 +50,16 @@ services:
   web:
     build:
       context: .
+    environment:
+      # Coolify magic variable: declared with no value, it is populated with the
+      # domain assigned to this service and wires up the proxy to port 80.
+      - SERVICE_FQDN_WEB_80
+    expose:
+      - "80"
     depends_on:
       - server
     networks:
-      - internal        # to reach the API/WebSocket service
-      - dokploy-network  # so Traefik can route your Domain here
+      - internal
     restart: unless-stopped
 
   # --- TURN relay (coturn) ---
@@ -56,8 +68,6 @@ services:
   # or a firewall that blocks UDP, the call completes signalling and then sits on
   # "connecting" forever because there is no path for the media.
   #
-  # Set TURN_SECRET to a long random string and TURN_URLS to your own host, e.g.
-  #   TURN_URLS=turn:turn.example.com:3478,turns:turn.example.com:5349
   # Port 5349 (TLS) matters: it is the one that survives restrictive networks
   # which block plain UDP. The server mints short-lived credentials from the
   # shared secret, so nothing long-lived is handed to the browser.
@@ -74,8 +84,8 @@ services:
     restart: unless-stopped
 
   # OpenAI-compatible, self-hosted speech-to-text. The model is downloaded on
-  # first use and cached in this volume. Set AI_TRANSCRIPTION_URL to
-  # http://speaches:8000 in Dokploy to enable the AI Notes buttons.
+  # first use and cached in this volume. AI_TRANSCRIPTION_URL already points at
+  # http://speaches:8000, so the AI Notes buttons work with no extra config.
   speaches:
     image: ghcr.io/speaches-ai/speaches:latest-cpu
     volumes:
@@ -85,8 +95,8 @@ services:
     restart: unless-stopped
 
   # --- LiveKit SFU (enable once LIVEKIT_KEYS is set in the Environment tab) ---
-  # Uncomment this service AFTER setting LIVEKIT_KEYS, then redeploy. Also add a
-  # Domain in Dokploy pointing at service "livekit" port 7880 (HTTPS/wss), and set
+  # Uncomment this service AFTER setting LIVEKIT_KEYS, then redeploy. Also assign
+  # a domain to service "livekit" on port 7880 (HTTPS/wss), and set
   # LIVEKIT_URL/LIVEKIT_API_KEY/LIVEKIT_API_SECRET so the server mints tokens.
   # Until then the app uses peer-to-peer mesh video automatically.
   # livekit:
@@ -95,19 +105,17 @@ services:
   #   volumes:
   #     - ./livekit.yaml:/etc/livekit/livekit.yaml:ro
   #   environment:
+  #     - SERVICE_FQDN_LIVEKIT_7880
   #     - LIVEKIT_KEYS=${LIVEKIT_KEYS:-}
   #   ports:
   #     - "7881:7881"        # RTC over TCP (fallback)
   #     - "7882:7882/udp"    # RTC over UDP (muxed)
   #   networks:
   #     - internal
-  #     - dokploy-network
   #   restart: unless-stopped
 
 networks:
   internal:
-  dokploy-network:
-    external: true
 
 volumes:
   db-data:
