@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Search, HelpCircle, Bell, CalendarPlus, ChevronDown, Video, MessageSquare,
-  Users, FileText, PenTool, PlayCircle, StickyNote, LogOut, Settings as Cog, User, Shield,
+  Users, FileText, PenTool, PlayCircle, StickyNote, LogOut, Settings as Cog, User, Shield, Sparkles,
 } from 'lucide-react'
 import { useApp } from '../store.jsx'
 import { relativeTime, toRoomId, newRoomId } from '../dates.js'
@@ -180,6 +180,11 @@ export default function Topbar() {
           </div>
         )}
       </div>
+
+      <button onClick={() => openModal('assistant')} title="Ask AI about your past meetings" className="flex items-center gap-1.5 text-brand-blue hover:text-brand-bluehover text-sm font-semibold">
+        <Sparkles className="w-5 h-5" />
+        <span className="hidden md:inline">AI Assistant</span>
+      </button>
 
       <button onClick={() => openModal('schedule')} className="flex items-center gap-1.5 text-brand-blue hover:text-brand-bluehover text-sm font-semibold">
         <CalendarPlus className="w-5 h-5" />

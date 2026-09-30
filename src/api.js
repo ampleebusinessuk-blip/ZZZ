@@ -111,6 +111,7 @@ export const api = {
   deleteMedia: (id) => request(`/media/${id}`, { method: 'DELETE' }),
   aiStatus: () => request('/ai/status'),
   generateAiNotes: (id) => request(`/media/${id}/ai-notes`, { method: 'POST' }),
+  askAssistant: (question) => request('/ai/assistant', { method: 'POST', body: { question } }),
 
   ice: () => request('/ice'),
   livekitConfig: () => request('/livekit/config'),

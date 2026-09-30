@@ -437,6 +437,57 @@ router.get('/media', (req, res) => {
   res.json({ items, storage: { used: usedBytes(req.user.id), quota: STORAGE_QUOTA_BYTES } })
 })
 
+/* ---------------- AI Assistant: Q&A grounded in the user's own meeting notes ----------------
+   No vector index — this is a linear scan over one user's recordings, newest first, capped so
+   the prompt stays inside a small local model's context window. Good enough for the handful of
+   AI-noted meetings a single account accrues; would need real retrieval at real scale. */
+const assistantLimit = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many questions. Try again in a few minutes.' } })
+
+function assistantMeetings(userId) {
+  return q.mediaByUser.all(userId).map(mediaRow)
+    .filter((m) => m.kind === 'recording' && m.aiNotes?.status === 'ready')
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, 8)
+}
+
+router.post('/ai/assistant', assistantLimit, async (req, res) => {
+  const question = String(req.body?.question || '').trim().slice(0, 1000)
+  if (!question) return res.status(400).json({ error: 'Ask a question first' })
+  if (!config.ai.summaryUrl) return res.status(503).json({ error: 'The AI Assistant needs AI_SUMMARY_URL set on the server.' })
+
+  const meetings = assistantMeetings(req.user.id)
+  if (!meetings.length) {
+    return res.json({
+      answer: "I don't have any meeting notes to draw from yet — record a meeting with AI Notes turned on, and I'll be able to answer questions about it afterwards.",
+      sources: [],
+    })
+  }
+
+  const blocks = meetings.map((m) => {
+    const notes = m.aiNotes
+    const when = new Date(m.createdAt).toLocaleDateString()
+    const decisions = notes.decisions?.length ? `\nDecisions: ${notes.decisions.join('; ')}` : ''
+    const actions = notes.actionItems?.length ? `\nAction items: ${notes.actionItems.map((a) => `${a.task} (${a.owner}, due ${a.due})`).join('; ')}` : ''
+    return `Meeting: "${m.title || 'Untitled meeting'}" — ${when}\nSummary: ${notes.summary || ''}${decisions}${actions}`
+  })
+  const prompt = `You are a helpful work assistant for ${req.user.name}. Answer the question using ONLY the meeting notes below — never invent facts. If the notes don't cover it, say so plainly instead of guessing. Keep the answer short and direct, and mention which meeting it came from when relevant.\n\n${blocks.join('\n\n')}\n\nQuestion: ${question}\nAnswer:`
+
+  try {
+    const resp = await fetch(aiEndpoint(config.ai.summaryUrl, '/api/generate'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: config.ai.summaryModel, prompt, stream: false }),
+      signal: AbortSignal.timeout(2 * 60 * 1000),
+    })
+    if (!resp.ok) throw new Error(`Assistant service returned ${resp.status}`)
+    const payload = await resp.json()
+    const answer = String(payload.response || '').trim() || "I couldn't come up with an answer to that — try rephrasing the question."
+    res.json({ answer, sources: meetings.map((m) => ({ id: m.id, title: m.title || 'Untitled meeting', createdAt: m.createdAt })) })
+  } catch {
+    res.status(502).json({ error: 'The AI Assistant is unavailable right now. Try again shortly.' })
+  }
+})
+
 // Raw binary upload. express.json() ignores non-JSON bodies, so the stream arrives intact.
 router.post('/media', (req, res) => {
   const kind = req.query.kind === 'clip' ? 'clip' : 'recording'
