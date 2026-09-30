@@ -1,8 +1,11 @@
-// Background blur / virtual background for the local camera feed, run entirely
-// in-browser via MediaPipe's selfie segmenter (WASM). Assets are self-hosted
-// under /mediapipe (copied from node_modules at build time) rather than
-// pulled from a CDN, so this works under the app's `script-src 'self'` CSP
-// and without a third-party dependency at call time.
+// Local camera pipeline: always center-crops to a square (so the tile you see
+// is the same shape as what's recorded and sent to peers — previously the
+// live tile was CSS-cropped with object-fit while the recording captured the
+// full, uncropped camera frame, so the two never matched), plus optional
+// background blur / virtual background via MediaPipe's selfie segmenter
+// (WASM), run entirely in-browser. Assets are self-hosted under /mediapipe
+// (copied from node_modules at build time) rather than pulled from a CDN, so
+// this works under the app's `script-src 'self'` CSP.
 import { ImageSegmenter, FilesetResolver } from '@mediapipe/tasks-vision'
 
 export const BACKGROUNDS = [
@@ -38,10 +41,17 @@ function gradientCanvas(colors, w, h) {
   return c
 }
 
-// Reads a video element, applies the current effect (background blur or
-// replacement via segmentation), and paints the result onto `canvas` every
-// frame. Call .start()/.stop() to run/pause the loop and .setEffect() to
-// change what's applied — cheap, since only the composite step changes.
+// The centered square region of the source video, in its own pixel space.
+function squareCrop(video) {
+  const vw = video.videoWidth, vh = video.videoHeight
+  const size = Math.min(vw, vh)
+  return { sx: (vw - size) / 2, sy: (vh - size) / 2, size }
+}
+
+// Reads a video element, always center-crops it to a square, applies the
+// current effect (background blur or replacement via segmentation) on top,
+// and paints the result onto `canvas` every frame. Call .start()/.stop() to
+// run/pause the loop and .setEffect() to change what's applied.
 export function createEffectPipeline(video, canvas) {
   const ctx = canvas.getContext('2d')
   const maskCanvas = document.createElement('canvas')
@@ -58,20 +68,27 @@ export function createEffectPipeline(video, canvas) {
   let failed = false
 
   function resize() {
-    const w = video.videoWidth, h = video.videoHeight
-    if (!w || !h) return false
-    if (canvas.width !== w || canvas.height !== h) {
-      canvas.width = w; canvas.height = h
-      cutoutCanvas.width = w; cutoutCanvas.height = h
-      bgCanvas.width = w; bgCanvas.height = h
+    if (!video.videoWidth || !video.videoHeight) return false
+    const { size } = squareCrop(video)
+    if (canvas.width !== size) {
+      canvas.width = size; canvas.height = size
+      cutoutCanvas.width = size; cutoutCanvas.height = size
+      bgCanvas.width = size; bgCanvas.height = size
     }
     return true
+  }
+
+  // Draws the square-cropped video frame into `target` (a 2D context sized
+  // to match, or to be scaled into — always draws to fill it completely).
+  function drawSquare(target) {
+    const { sx, sy, size } = squareCrop(video)
+    target.drawImage(video, sx, sy, size, size, 0, 0, target.canvas.width, target.canvas.height)
   }
 
   function drawBackground() {
     if (effect.type === 'blur') {
       bgCtx.filter = `blur(${effect.strength || 14}px)`
-      bgCtx.drawImage(video, 0, 0, bgCanvas.width, bgCanvas.height)
+      drawSquare(bgCtx)
       bgCtx.filter = 'none'
     } else if (effect.type === 'image') {
       if (lastGradientId !== effect.bgId) {
@@ -87,6 +104,7 @@ export function createEffectPipeline(video, canvas) {
     try {
       if (resize() && effect.type !== 'none' && !failed) {
         const segmenter = await getSegmenter()
+        const { sx, sy, size } = squareCrop(video)
         segmenter.segmentForVideo(video, performance.now(), (result) => {
           const mask = result.confidenceMasks?.[0]
           if (!mask) return
@@ -98,11 +116,17 @@ export function createEffectPipeline(video, canvas) {
           maskCtx.putImageData(alphaImg, 0, 0)
           mask.close?.()
 
-          // Cut the person out of the full-res frame using the (upscaled) alpha mask.
+          // Cut the person out of the square-cropped frame using the mask —
+          // the mask itself is full-frame-shaped (not pre-cropped), so pull
+          // the same square region out of it as out of the video.
           cutoutCtx.clearRect(0, 0, cutoutCanvas.width, cutoutCanvas.height)
-          cutoutCtx.drawImage(video, 0, 0, cutoutCanvas.width, cutoutCanvas.height)
+          drawSquare(cutoutCtx)
           cutoutCtx.globalCompositeOperation = 'destination-in'
-          cutoutCtx.drawImage(maskCanvas, 0, 0, cutoutCanvas.width, cutoutCanvas.height)
+          const maskScaleX = mw / video.videoWidth, maskScaleY = mh / video.videoHeight
+          cutoutCtx.drawImage(
+            maskCanvas, sx * maskScaleX, sy * maskScaleY, size * maskScaleX, size * maskScaleY,
+            0, 0, cutoutCanvas.width, cutoutCanvas.height
+          )
           cutoutCtx.globalCompositeOperation = 'source-over'
 
           drawBackground()
@@ -110,13 +134,13 @@ export function createEffectPipeline(video, canvas) {
           ctx.drawImage(cutoutCanvas, 0, 0)
         })
       } else if (resize()) {
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+        drawSquare(ctx)
       }
     } catch {
       // A model/segmentation failure shouldn't freeze the call — fall back to
-      // the plain camera frame for the rest of the session.
+      // the plain (still square-cropped) camera frame for the rest of the session.
       failed = true
-      if (resize()) ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+      if (resize()) drawSquare(ctx)
     }
     raf = requestAnimationFrame(loop)
   }

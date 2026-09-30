@@ -116,14 +116,18 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
     const stream = localStream.current
     if (!stream) return
     const existing = pc.getSenders().map((s) => s.track).filter(Boolean)
-    for (const track of stream.getTracks()) {
-      if (existing.includes(track)) continue
-      // While sharing, publish the screen in the video slot instead of the camera.
-      if (track.kind === 'video' && screenStream.current) continue
-      pc.addTrack(track, stream)
+    for (const track of stream.getAudioTracks()) {
+      if (!existing.includes(track)) pc.addTrack(track, stream)
     }
+    // Video: screen share takes priority; otherwise send the square-cropped
+    // canvas track (what's shown locally and what gets recorded) rather than
+    // the raw camera track — falls back to raw only in the brief window
+    // before the canvas pipeline has produced its first frame.
     const screenTrack = screenStream.current?.getVideoTracks()[0]
-    if (screenTrack && !existing.includes(screenTrack)) pc.addTrack(screenTrack, screenStream.current)
+    const videoTrack = screenTrack || effectTrackRef.current || stream.getVideoTracks()[0]
+    if (videoTrack && !existing.includes(videoTrack)) {
+      pc.addTrack(videoTrack, screenTrack ? screenStream.current : stream)
+    }
   }
 
   const createPeer = useCallback((peerId, meta) => {
@@ -277,6 +281,26 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
         if (localVideoRef.current) localVideoRef.current.srcObject = stream
         localFlags.current = { ...localFlags.current, mic: !joinMuted, cam: !!videoTrack && wantVideo }
         refreshDevices()
+
+        // Always route the camera through the square-crop pipeline before it
+        // ever reaches a peer or a recording — otherwise the live tile (CSS
+        // object-fit) and the raw recorded track show different framing.
+        if (videoTrack && localVideoRef.current && effectCanvasRef.current) {
+          const videoEl = localVideoRef.current
+          if (!(videoEl.videoWidth > 0)) {
+            await new Promise((resolve) => {
+              const onReady = () => { videoEl.removeEventListener('loadedmetadata', onReady); resolve() }
+              videoEl.addEventListener('loadedmetadata', onReady)
+            })
+          }
+          if (!cancelled) {
+            effectsCtrl.current = createEffectPipeline(videoEl, effectCanvasRef.current)
+            effectsCtrl.current.start()
+            const track = effectCanvasRef.current.captureStream(30).getVideoTracks()[0]
+            track.enabled = wantVideo
+            effectTrackRef.current = track
+          }
+        }
       } else {
         setHasCamera(false); setCam(false)
         localFlags.current = { ...localFlags.current, mic: false, cam: false }
@@ -437,30 +461,15 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
     return next
   })
 
-  // Background blur / replacement: runs a segmentation pipeline over the raw
-  // camera feed and, while active, sends its canvas output instead of the
-  // camera track directly. Skipped while screen sharing (nothing to blur).
+  // The canvas pipeline (started once, in the join effect above) always runs
+  // and always sends its square-cropped output — toggling a background
+  // effect just changes what it draws, not which track is being sent, so no
+  // renegotiation is needed here.
   useEffect(() => {
-    if (!localVideoRef.current || !effectCanvasRef.current) return
-    if (!effectsCtrl.current) effectsCtrl.current = createEffectPipeline(localVideoRef.current, effectCanvasRef.current)
-    const ctrl = effectsCtrl.current
-
-    if (bgEffect) {
-      ctrl.setEffect(bgEffect.type === 'blur' ? { type: 'blur', strength: 14 } : { type: 'image', bgId: bgEffect.bgId })
-      ctrl.start()
-      if (!effectTrackRef.current) {
-        const track = effectCanvasRef.current.captureStream(30).getVideoTracks()[0]
-        track.enabled = cam
-        effectTrackRef.current = track
-      }
-      if (!sharing) setVideoSenders(effectTrackRef.current)
-    } else {
-      ctrl.stop()
-      if (effectTrackRef.current) { effectTrackRef.current.stop(); effectTrackRef.current = null }
-      if (!sharing) setVideoSenders(localStream.current?.getVideoTracks()[0] || null)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bgEffect, sharing])
+    effectsCtrl.current?.setEffect(
+      bgEffect ? (bgEffect.type === 'blur' ? { type: 'blur', strength: 14 } : { type: 'image', bgId: bgEffect.bgId }) : { type: 'none' }
+    )
+  }, [bgEffect])
 
   useEffect(() => () => { effectsCtrl.current?.stop(); effectTrackRef.current?.stop() }, [])
 
@@ -475,8 +484,7 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
   const stopShare = useCallback(() => {
     screenStream.current?.getTracks().forEach((t) => t.stop())
     screenStream.current = null
-    const camTrack = localStream.current?.getVideoTracks()[0] || null
-    setVideoSenders(camTrack)
+    setVideoSenders(effectTrackRef.current || localStream.current?.getVideoTracks()[0] || null)
     if (localVideoRef.current) localVideoRef.current.srcObject = localStream.current
     setSharing(false)
     publishState({ sharing: false })
@@ -511,10 +519,15 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
       if (old) { localStream.current.removeTrack(old); old.stop() }
       localStream.current?.addTrack(newTrack)
       newTrack.enabled = newTrack.kind === 'video' ? cam : mic
-      peers.current.forEach(({ pc }) => {
-        const sender = pc.getSenders().find((s) => s.track?.kind === newTrack.kind)
-        if (sender && !(newTrack.kind === 'video' && (sharing || bgEffect))) sender.replaceTrack(newTrack).catch(() => {})
-      })
+      if (newTrack.kind === 'audio') {
+        peers.current.forEach(({ pc }) => {
+          const sender = pc.getSenders().find((s) => s.track?.kind === 'audio')
+          if (sender) sender.replaceTrack(newTrack).catch(() => {})
+        })
+      }
+      // Video devices don't need a sender swap: the canvas pipeline reads
+      // from this same <video> element, so it just starts drawing the new
+      // camera's frames on the next tick — the outgoing track is unchanged.
       if (newTrack.kind === 'video' && !sharing && localVideoRef.current) localVideoRef.current.srcObject = localStream.current
       if (newTrack.kind === 'video') setHasCamera(true)
       toast(`${kind === 'camera' ? 'Camera' : 'Microphone'} switched`, 'check')
@@ -548,7 +561,9 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
   /* ---------------- recording ---------------- */
   const toggleRecord = () => {
     if (recording) { try { recorder.current?.stop() } catch {}; return }
-    const videoTrack = screenStream.current?.getVideoTracks()[0] || localStream.current?.getVideoTracks()[0]
+    // Same square-cropped track that's shown locally and sent to peers, so
+    // the recording always matches what was actually visible during the call.
+    const videoTrack = screenStream.current?.getVideoTracks()[0] || effectTrackRef.current || localStream.current?.getVideoTracks()[0]
     if (!videoTrack && !localStream.current?.getAudioTracks().length) return toast('Nothing to record', 'info')
 
     const mix = ensureMixer()
@@ -764,8 +779,23 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
           ))}
           <div className={`relative flex-1 grid gap-1 sm:gap-3 min-h-0 ${alone ? 'grid-cols-1' : count <= 4 ? 'grid-cols-1 sm:grid-cols-2 auto-rows-fr' : 'grid-cols-2 md:grid-cols-3 auto-rows-fr'}`}>
             <div className={`overflow-hidden bg-[#171B22] grid place-items-center ring-1 ${mic ? 'ring-brand-blue/70' : 'ring-white/10'} ${count === 2 ? 'absolute z-10 top-3 right-3 h-[28%] min-h-[132px] w-[34%] rounded-2xl shadow-2xl sm:relative sm:top-auto sm:right-auto sm:h-auto sm:min-h-0 sm:w-auto sm:rounded-2xl sm:shadow-none' : 'relative min-h-0 rounded-none sm:rounded-2xl'}`}>
-              <video ref={localVideoRef} autoPlay muted playsInline className={`w-full h-full bg-black ${count === 2 ? 'object-cover sm:object-contain' : fitVideo ? 'object-contain' : 'object-cover'} ${showSelfVideo && !bgEffect ? '' : 'hidden'} ${selfMirrored ? '-scale-x-100' : ''}`} />
-              <canvas ref={effectCanvasRef} className={`w-full h-full bg-black ${count === 2 ? 'object-cover sm:object-contain' : fitVideo ? 'object-contain' : 'object-cover'} ${showSelfVideo && bgEffect ? '' : 'hidden'} ${selfMirrored ? '-scale-x-100' : ''}`} />
+              {/* Screen share shows the raw stream as-is; the camera always goes through
+                  the square-crop canvas below, so the live tile matches what's recorded. */}
+              <video ref={localVideoRef} autoPlay muted playsInline className={
+                showSelfVideo && sharing
+                  ? `w-full h-full bg-black ${count === 2 ? 'object-cover sm:object-contain' : fitVideo ? 'object-contain' : 'object-cover'} ${selfMirrored ? '-scale-x-100' : ''}`
+                  // `hidden` (display:none) makes Chromium pause a video element's
+                  // decoding — this one must keep playing at all times so the
+                  // canvas pipeline (which reads from it every frame) doesn't
+                  // freeze, so it's shrunk to invisible instead of unmounted.
+                  : 'absolute w-px h-px opacity-0 pointer-events-none overflow-hidden'
+              } />
+              {/* Always a 1:1 square (the pipeline center-crops every frame to match) —
+                  `aspect-square` + max-w/h-full, not w-full h-full, because relying on
+                  h-full to resolve against this grid's height silently produced an
+                  oversized square box that the tile's overflow-hidden then clipped
+                  back down to a wide slice, undoing the crop visually. */}
+              <canvas ref={effectCanvasRef} className={`max-w-full max-h-full aspect-square bg-black rounded-xl ${showSelfVideo && !sharing ? '' : 'hidden'} ${selfMirrored ? '-scale-x-100' : ''}`} />
               {!showSelfVideo && <img src={currentUser?.avatar} alt="You" className="w-24 h-24 rounded-full object-cover opacity-90" />}
               {handUp && <div className="absolute top-2 right-2 w-8 h-8 rounded-full bg-amber-400 text-black grid place-items-center text-lg">✋</div>}
               <div className="absolute bottom-2 left-2 flex items-center gap-1.5 px-2 py-1 rounded-lg bg-black/50 backdrop-blur text-xs">
