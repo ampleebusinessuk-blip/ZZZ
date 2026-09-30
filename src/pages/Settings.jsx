@@ -145,7 +145,6 @@ export default function Settings() {
             <Group title="Video">
               <Toggle on={s.hd} onClick={() => setSetting('hd', !s.hd)} label="Enable HD" desc="Requests 1280×720 instead of 640×360 from your camera" />
               <Toggle on={s.mirror} onClick={() => setSetting('mirror', !s.mirror)} label="Mirror my video" />
-              <Toggle on={s.autoJoin} onClick={() => setSetting('autoJoin', !s.autoJoin)} label="Turn on video when joining" desc="Applies the next time you join a meeting" />
             </Group>
           )}
 

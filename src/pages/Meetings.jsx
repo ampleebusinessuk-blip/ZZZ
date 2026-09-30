@@ -142,7 +142,6 @@ export default function Meetings() {
           </div>
 
           <div className="mt-4 grid grid-cols-2 gap-4 text-sm">
-            <Info label="Video on join" value={state.settings?.autoJoin === false ? 'Off' : 'On'} />
             <Info label="Video quality" value={state.settings?.hd === false ? 'Standard' : 'HD'} />
             <Info label="Noise suppression" value={state.settings?.suppressNoise === false ? 'Off' : 'On'} />
             <Info label="Mirror my video" value={state.settings?.mirror === false ? 'Off' : 'On'} />
