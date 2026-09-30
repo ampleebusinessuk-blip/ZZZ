@@ -1,12 +1,8 @@
 import { BRAND } from '../brand.js'
 
 /*
-  Zoom17 wordmark, drawn inline so it needs no network request and can recolour
-  itself for dark backgrounds. It renders BRAND.name as text rather than as
-  hand-drawn letter paths, so renaming the product in `brand.js` is enough — no
-  new artwork required. A trailing number is tinted with the accent colour.
-  The same artwork is available as a standalone file at `public/brand/zoom17.svg`
-  for favicons, OG images and design handoff.
+  Central Zoom17 wordmark renderer. The supplied transparent brand asset is used
+  everywhere; the vector fallback remains available if that asset is removed.
 */
 export default function Logo({ className = '', invert = false, height = 26, title = BRAND.name }) {
   const navy = invert ? BRAND.invertedNavy : BRAND.navy
@@ -18,7 +14,7 @@ export default function Logo({ className = '', invert = false, height = 26, titl
   const src = (invert && BRAND.logoSrcInverted) || BRAND.logoSrc
   if (src) {
     return (
-      <div className={`flex items-center ${invert && !BRAND.logoSrcInverted ? 'rounded-lg bg-white px-2 py-1 shadow-sm' : ''} ${className}`}>
+      <div className={`flex items-center ${invert && !BRAND.logoSrcInverted ? 'rounded-xl bg-white px-2.5 py-1.5 shadow-sm' : ''} ${className}`}>
         <img src={src} alt={title} height={height} style={{ height }} className="block w-auto select-none" />
       </div>
     )

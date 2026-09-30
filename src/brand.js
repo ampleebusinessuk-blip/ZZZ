@@ -10,12 +10,7 @@ export const BRAND = {
   invertedNavy: '#FFFFFF',
   invertedBlue: '#6BA4FF',
 
-  /* To use an exact logo export instead of the drawn wordmark, drop the file in
-     `public/brand/` and point these at it, e.g.:
-       logoSrc: '/brand/zoom17.svg',
-       logoSrcInverted: '/brand/zoom17-white.svg',   // optional, for dark panels
-     Leave them null to keep the built-in vector wordmark, which draws BRAND.name
-     directly and so needs no new artwork when the product name changes. */
-  logoSrc: null,
+  // Exact transparent export supplied for the product identity.
+  logoSrc: '/brand/zoom17-logo.png',
   logoSrcInverted: null,
 }
