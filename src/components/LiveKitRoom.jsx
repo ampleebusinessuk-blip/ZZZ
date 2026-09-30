@@ -29,8 +29,8 @@ export default function LiveKitMeeting({ token, serverUrl, meetingId, onLeave, t
         token={token}
         serverUrl={serverUrl}
         connect
-        video
-        audio
+        video={false}
+        audio={false}
         onDisconnected={onLeave}
         style={{ height: '100vh' }}
       >
