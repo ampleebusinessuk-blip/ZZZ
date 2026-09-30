@@ -22,7 +22,7 @@ export default function GuestJoin() {
 
   const [guest, setGuest] = useState(null)
   const [name, setName] = useState('')
-  const [opts, setOpts] = useState({ audioOn: false, videoOn: false })
+  const [opts, setOpts] = useState({ muted: false, noVideo: false })
   const [checking, setChecking] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -49,10 +49,10 @@ export default function GuestJoin() {
 
   if (guest) {
     const search = new URLSearchParams()
-    if (opts.audioOn) search.set('unmuted', '1')
-    if (opts.videoOn) search.set('video', '1')
+    if (opts.muted) search.set('muted', '1')
+    if (opts.noVideo) search.set('novideo', '1')
     // Keep the join choices on the URL so MeshRoom applies them, as it does for members.
-    if ([...search].length && !window.location.search.includes('unmuted') && !window.location.search.includes('video')) {
+    if ([...search].length && !window.location.search.includes('muted') && !window.location.search.includes('novideo')) {
       window.history.replaceState(null, '', `${window.location.pathname}?${search}`)
     }
     return (
@@ -118,14 +118,13 @@ export default function GuestJoin() {
                 </label>
 
                 <div className="space-y-2.5">
-                  <p className="text-xs text-ink-500">Mic and camera join off by default.</p>
                   <label className="flex items-center gap-2.5 text-sm text-ink-700">
-                    <input type="checkbox" className="w-4 h-4 accent-brand-blue" checked={opts.audioOn}
-                      onChange={(e) => setOpts((o) => ({ ...o, audioOn: e.target.checked }))} /> Join with mic on
+                    <input type="checkbox" className="w-4 h-4 accent-brand-blue" checked={opts.muted}
+                      onChange={(e) => setOpts((o) => ({ ...o, muted: e.target.checked }))} /> Join muted
                   </label>
                   <label className="flex items-center gap-2.5 text-sm text-ink-700">
-                    <input type="checkbox" className="w-4 h-4 accent-brand-blue" checked={opts.videoOn}
-                      onChange={(e) => setOpts((o) => ({ ...o, videoOn: e.target.checked }))} /> Join with video on
+                    <input type="checkbox" className="w-4 h-4 accent-brand-blue" checked={opts.noVideo}
+                      onChange={(e) => setOpts((o) => ({ ...o, noVideo: e.target.checked }))} /> Turn off my video
                   </label>
                 </div>
 
