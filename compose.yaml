@@ -46,15 +46,6 @@ services:
     networks:
       - internal
     restart: unless-stopped
-    # `restart: unless-stopped` only fires on process exit, not on a hang — this
-    # makes a stuck-but-alive event loop show up as unhealthy instead of silently
-    # serving nothing until someone notices and redeploys by hand.
-    healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get({host:'localhost',port:4000,path:'/'},(r)=>process.exit(0)).on('error',()=>process.exit(1))"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
 
   web:
     build:
@@ -70,12 +61,6 @@ services:
     networks:
       - internal
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:80/"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
 
   # --- TURN relay (coturn) ---
   # Mesh video needs this the moment two people are on different networks. STUN
