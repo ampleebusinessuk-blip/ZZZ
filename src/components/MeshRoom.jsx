@@ -6,13 +6,14 @@ import {
   Settings2, Loader2, AlertTriangle, UserPlus,
   Sparkles,
   UserMinus,
-  MoreHorizontal, SwitchCamera, Check, Clock3,
+  MoreHorizontal, SwitchCamera, Check, Clock3, Image as ImageIcon,
 } from 'lucide-react'
 import { useApp } from '../store.jsx'
 import { api } from '../api.js'
 import { rt } from '../realtime.js'
 import { messageTime } from '../dates.js'
 import { createGuestInviteLink } from '../invites.js'
+import { createEffectPipeline, BACKGROUNDS } from '../videoEffects.js'
 
 // Fallback only. The real list is fetched per call so TURN credentials stay
 // short-lived; STUN alone cannot relay media between restrictive NATs.
@@ -56,6 +57,8 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
   const [moreSheet, setMoreSheet] = useState(false)
   const [devices, setDevices] = useState({ cameras: [], mics: [] })
   const [chosen, setChosen] = useState({ camera: '', mic: '' })
+  const [bgEffect, setBgEffect] = useState(null) // null | { type: 'blur' } | { type: 'image', bgId }
+  const [bgPanel, setBgPanel] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const [remotePeers, setRemotePeers] = useState({})
   const [flyers, setFlyers] = useState([])
@@ -65,6 +68,9 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
   const localVideoRef = useRef(null)
   const localStream = useRef(null)
   const screenStream = useRef(null)
+  const effectCanvasRef = useRef(null)
+  const effectsCtrl = useRef(null)
+  const effectTrackRef = useRef(null) // the canvas-captured video track sent when an effect is active
   const peers = useRef(new Map())   // peerId -> { pc, pending: [], polite, makingOffer, meta }
   const chatRef = useRef(null)
   const recorder = useRef(null)
@@ -426,9 +432,37 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
   const toggleCam = () => setCam((v) => {
     const next = !v
     localStream.current?.getVideoTracks().forEach((t) => (t.enabled = next))
+    if (effectTrackRef.current) effectTrackRef.current.enabled = next
     publishState({ cam: next })
     return next
   })
+
+  // Background blur / replacement: runs a segmentation pipeline over the raw
+  // camera feed and, while active, sends its canvas output instead of the
+  // camera track directly. Skipped while screen sharing (nothing to blur).
+  useEffect(() => {
+    if (!localVideoRef.current || !effectCanvasRef.current) return
+    if (!effectsCtrl.current) effectsCtrl.current = createEffectPipeline(localVideoRef.current, effectCanvasRef.current)
+    const ctrl = effectsCtrl.current
+
+    if (bgEffect) {
+      ctrl.setEffect(bgEffect.type === 'blur' ? { type: 'blur', strength: 14 } : { type: 'image', bgId: bgEffect.bgId })
+      ctrl.start()
+      if (!effectTrackRef.current) {
+        const track = effectCanvasRef.current.captureStream(30).getVideoTracks()[0]
+        track.enabled = cam
+        effectTrackRef.current = track
+      }
+      if (!sharing) setVideoSenders(effectTrackRef.current)
+    } else {
+      ctrl.stop()
+      if (effectTrackRef.current) { effectTrackRef.current.stop(); effectTrackRef.current = null }
+      if (!sharing) setVideoSenders(localStream.current?.getVideoTracks()[0] || null)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bgEffect, sharing])
+
+  useEffect(() => () => { effectsCtrl.current?.stop(); effectTrackRef.current?.stop() }, [])
 
   const setVideoSenders = (track) => peers.current.forEach(({ pc }) => {
     const sender = pc.getSenders().find((s) => s.track?.kind === 'video')
@@ -479,7 +513,7 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
       newTrack.enabled = newTrack.kind === 'video' ? cam : mic
       peers.current.forEach(({ pc }) => {
         const sender = pc.getSenders().find((s) => s.track?.kind === newTrack.kind)
-        if (sender && !(newTrack.kind === 'video' && sharing)) sender.replaceTrack(newTrack).catch(() => {})
+        if (sender && !(newTrack.kind === 'video' && (sharing || bgEffect))) sender.replaceTrack(newTrack).catch(() => {})
       })
       if (newTrack.kind === 'video' && !sharing && localVideoRef.current) localVideoRef.current.srcObject = localStream.current
       if (newTrack.kind === 'video') setHasCamera(true)
@@ -730,7 +764,8 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
           ))}
           <div className={`relative flex-1 grid gap-1 sm:gap-3 min-h-0 ${alone ? 'grid-cols-1' : count <= 4 ? 'grid-cols-1 sm:grid-cols-2 auto-rows-fr' : 'grid-cols-2 md:grid-cols-3 auto-rows-fr'}`}>
             <div className={`overflow-hidden bg-[#171B22] grid place-items-center ring-1 ${mic ? 'ring-brand-blue/70' : 'ring-white/10'} ${count === 2 ? 'absolute z-10 top-3 right-3 h-[28%] min-h-[132px] w-[34%] rounded-2xl shadow-2xl sm:relative sm:top-auto sm:right-auto sm:h-auto sm:min-h-0 sm:w-auto sm:rounded-2xl sm:shadow-none' : 'relative min-h-0 rounded-none sm:rounded-2xl'}`}>
-              <video ref={localVideoRef} autoPlay muted playsInline className={`w-full h-full bg-black ${count === 2 ? 'object-cover sm:object-contain' : fitVideo ? 'object-contain' : 'object-cover'} ${showSelfVideo ? '' : 'hidden'} ${selfMirrored ? '-scale-x-100' : ''}`} />
+              <video ref={localVideoRef} autoPlay muted playsInline className={`w-full h-full bg-black ${count === 2 ? 'object-cover sm:object-contain' : fitVideo ? 'object-contain' : 'object-cover'} ${showSelfVideo && !bgEffect ? '' : 'hidden'} ${selfMirrored ? '-scale-x-100' : ''}`} />
+              <canvas ref={effectCanvasRef} className={`w-full h-full bg-black ${count === 2 ? 'object-cover sm:object-contain' : fitVideo ? 'object-contain' : 'object-cover'} ${showSelfVideo && bgEffect ? '' : 'hidden'} ${selfMirrored ? '-scale-x-100' : ''}`} />
               {!showSelfVideo && <img src={currentUser?.avatar} alt="You" className="w-24 h-24 rounded-full object-cover opacity-90" />}
               {handUp && <div className="absolute top-2 right-2 w-8 h-8 rounded-full bg-amber-400 text-black grid place-items-center text-lg">✋</div>}
               <div className="absolute bottom-2 left-2 flex items-center gap-1.5 px-2 py-1 rounded-lg bg-black/50 backdrop-blur text-xs">
@@ -818,6 +853,33 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
         <div className="relative flex items-center gap-1 sm:gap-1.5 rounded-full bg-[#0B0E14]/95 ring-1 ring-white/10 shadow-2xl backdrop-blur-xl px-1.5 py-1.5 sm:px-2">
           <RoundBtn icon={mic ? Mic : MicOff} danger={!mic} onClick={toggleMic} disabled={!mediaReady} label={mic ? 'Mute' : 'Unmute'} />
           <RoundBtn icon={cam ? VideoIcon : VideoOff} danger={!cam} onClick={toggleCam} disabled={!mediaReady || !hasCamera} label={cam ? 'Stop video' : 'Start video'} />
+          <div className="relative">
+            <RoundBtn icon={ImageIcon} active={!!bgEffect || bgPanel} onClick={() => setBgPanel((v) => !v)} disabled={!mediaReady || !hasCamera} label="Background" className="hidden sm:grid" />
+            {bgPanel && (
+              <div className="absolute bottom-16 left-1/2 -translate-x-1/2 w-72 bg-[#1B2029] border border-white/10 rounded-2xl p-3 shadow-xl animate-pop text-left">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-semibold text-white/70">Background</p>
+                  <button onClick={() => setBgPanel(false)} className="p-1 rounded hover:bg-white/10 text-white/60"><X className="w-3.5 h-3.5" /></button>
+                </div>
+                <div className="grid grid-cols-4 gap-2">
+                  <button onClick={() => setBgEffect(null)} title="None"
+                    className={`aspect-square rounded-xl grid place-items-center text-[10px] font-semibold border-2 bg-white/5 text-white/70 hover:bg-white/10 ${!bgEffect ? 'border-brand-blue' : 'border-transparent'}`}>
+                    None
+                  </button>
+                  <button onClick={() => setBgEffect({ type: 'blur' })} title="Blur"
+                    className={`aspect-square rounded-xl grid place-items-center text-[10px] font-semibold border-2 bg-white/10 text-white hover:bg-white/15 ${bgEffect?.type === 'blur' ? 'border-brand-blue' : 'border-transparent'}`}>
+                    Blur
+                  </button>
+                  {BACKGROUNDS.map((bg) => (
+                    <button key={bg.id} onClick={() => setBgEffect({ type: 'image', bgId: bg.id })} title={bg.label}
+                      style={{ background: `linear-gradient(135deg, ${bg.colors[0]}, ${bg.colors[1]})` }}
+                      className={`aspect-square rounded-xl border-2 ${bgEffect?.type === 'image' && bgEffect.bgId === bg.id ? 'border-brand-blue' : 'border-transparent'}`}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
           <RoundBtn icon={sharing ? MonitorUp : ScreenShare} active={sharing} onClick={toggleShare} disabled={!mediaReady} label={sharing ? 'Stop sharing' : 'Share screen'} className="hidden sm:grid" />
           <div className="relative">
             <RoundBtn icon={Smile} active={reactPicker} onClick={() => setReactPicker((v) => !v)} label="React" className="hidden sm:grid" />
@@ -873,6 +935,7 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
                   <SheetAction icon={Users} label="Participants" active={panel === 'people'} onClick={() => { setPanel('people'); setMoreSheet(false) }} />
                 </div>
                 <SheetAction icon={SwitchCamera} label="Flip camera" onClick={() => { cycleCamera(); setMoreSheet(false) }} />
+                <SheetAction icon={ImageIcon} label="Background" active={!!bgEffect} onClick={() => { setBgPanel(true); setMoreSheet(false) }} />
                 <SheetAction icon={Settings2} label="Devices" active={deviceMenu} onClick={() => { refreshDevices(); setDeviceMenu(true); setMoreSheet(false) }} />
                 {!isGuest && <SheetAction icon={recording ? Square : Disc} label={recording ? 'Stop record' : 'Record'} active={recording} onClick={() => { toggleRecord(); setMoreSheet(false) }} />}
                 {!isGuest && <SheetAction icon={Sparkles} label={aiTakingNotes ? 'Stop AI' : 'AI Notes'} active={aiTakingNotes} onClick={() => { toggleAiNotes(); setMoreSheet(false) }} />}
