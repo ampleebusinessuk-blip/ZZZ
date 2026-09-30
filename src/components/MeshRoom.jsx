@@ -6,7 +6,7 @@ import {
   Settings2, Loader2, AlertTriangle, UserPlus,
   Sparkles,
   UserMinus,
-  MoreHorizontal, SwitchCamera,
+  MoreHorizontal, SwitchCamera, Check, Clock3,
 } from 'lucide-react'
 import { useApp } from '../store.jsx'
 import { api } from '../api.js'
@@ -43,10 +43,14 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
   const [saving, setSaving] = useState(0)
   const [aiTakingNotes, setAiTakingNotes] = useState(false)
   const [isHost, setIsHost] = useState(!isGuest)
+  // 'connecting' until the server says otherwise; everyone but the meeting's
+  // host waits here for a host to admit them — the same flow as Zoom's lobby.
+  const [admission, setAdmission] = useState('connecting')
+  const [pendingRequests, setPendingRequests] = useState([])
   const [panel, setPanel] = useState(null)
   const [reactPicker, setReactPicker] = useState(false)
   const [deviceMenu, setDeviceMenu] = useState(false)
-  const [mobileMore, setMobileMore] = useState(false)
+  const [moreSheet, setMoreSheet] = useState(false)
   const [devices, setDevices] = useState({ cameras: [], mics: [] })
   const [chosen, setChosen] = useState({ camera: '', mic: '' })
   const [elapsed, setElapsed] = useState(0)
@@ -283,11 +287,21 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
 
     const offs = [
       rt.on('peers', ({ peers: existing }) => {
+        setAdmission('admitted')
         existing?.forEach((p) => {
           createPeer(p.peerId, { name: p.name, avatar: p.avatar })
           // The newcomer offers; onnegotiationneeded fires once tracks are attached.
         })
         if (existing?.length) setTimeout(() => publishState(), 400)
+      }),
+      rt.on('waiting-for-admission', () => setAdmission('waiting')),
+      rt.on('admission-denied', () => setAdmission('denied')),
+      // Host-only: someone new is waiting to be let in.
+      rt.on('admission-request', ({ requestId, name, avatar, guest }) => {
+        setPendingRequests((prev) => (prev.some((r) => r.requestId === requestId) ? prev : [...prev, { requestId, name, avatar, guest }]))
+      }),
+      rt.on('admission-cancelled', ({ requestId }) => {
+        setPendingRequests((prev) => prev.filter((r) => r.requestId !== requestId))
       }),
       rt.on('peer-joined', ({ peerId, name, avatar }) => {
         createPeer(peerId, { name, avatar })
@@ -353,6 +367,7 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
     return () => {
       cancelled = true
       rt.send({ type: 'leave-room', roomId })
+      rt.send({ type: 'cancel-join' }) // no-op unless we were still waiting to be admitted
       offs.forEach((off) => off())
       try { if (recorder.current?.state === 'recording') recorder.current.stop() } catch {}
       try { recAudio.current?.ctx.close() } catch {}
@@ -463,7 +478,7 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
       const current = localStream.current?.getVideoTracks()[0]?.getSettings()?.deviceId
       const index = Math.max(0, cameras.findIndex((device) => device.deviceId === current))
       await switchDevice('camera', cameras[(index + 1) % cameras.length].deviceId)
-      setMobileMore(false)
+      setMoreSheet(false)
     } catch { toast('Could not switch camera', 'info') }
   }
 
@@ -581,6 +596,10 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
 
   const sendChat = () => { if (text.trim()) { rt.send({ type: 'chat', channelId: `room:${roomId}`, text: text.trim() }); setText('') } }
   const leave = () => (onLeave ? onLeave() : navigate('/'))
+  const respondAdmission = (requestId, action) => {
+    rt.send({ type: 'admission-response', roomId, requestId, action })
+    setPendingRequests((prev) => prev.filter((r) => r.requestId !== requestId))
+  }
 
   // Auto-start screen share when opened via the "Share Screen" action.
   const autoSharedRef = useRef(false)
@@ -599,6 +618,37 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
   const alone = remoteList.length === 0
   const selfMirrored = mirror && !sharing
   const showSelfVideo = (cam && hasCamera) || sharing
+
+  if (admission === 'waiting' || admission === 'denied') {
+    return (
+      <div className="h-[100dvh] min-h-[100svh] w-screen bg-[#080B10] text-white flex flex-col items-center justify-center gap-6 px-6 text-center">
+        <div className="relative w-full max-w-sm aspect-video rounded-2xl overflow-hidden bg-[#171B22] ring-1 ring-white/10 grid place-items-center">
+          <video ref={localVideoRef} autoPlay muted playsInline className={`w-full h-full bg-black object-cover ${showSelfVideo ? '' : 'hidden'} ${selfMirrored ? '-scale-x-100' : ''}`} />
+          {!showSelfVideo && <img src={currentUser?.avatar} alt="You" className="w-20 h-20 rounded-full object-cover opacity-90" />}
+          {mediaReady && (
+            <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-2">
+              <RoundBtn small danger={!mic} icon={mic ? Mic : MicOff} onClick={toggleMic} label={mic ? 'Mute' : 'Unmute'} />
+              <RoundBtn small danger={!cam} icon={cam ? VideoIcon : VideoOff} onClick={toggleCam} label={cam ? 'Stop video' : 'Start video'} disabled={!hasCamera} />
+            </div>
+          )}
+        </div>
+        {admission === 'waiting' ? (
+          <>
+            <div className="flex items-center gap-2 text-white/80"><Loader2 className="w-4 h-4 animate-spin" /><p className="font-semibold">Waiting for the host to let you in</p></div>
+            <p className="text-sm text-white/50 max-w-xs">The host has been notified. You'll join the call as soon as they admit you.</p>
+          </>
+        ) : (
+          <>
+            <p className="font-semibold text-red-300">The host didn't admit you</p>
+            <p className="text-sm text-white/50 max-w-xs">You weren't let into this meeting. You can try again if that was a mistake.</p>
+          </>
+        )}
+        <button onClick={leave} className="h-10 px-5 rounded-xl bg-white/10 hover:bg-white/15 text-sm font-semibold">
+          {admission === 'waiting' ? 'Cancel' : 'Leave'}
+        </button>
+      </div>
+    )
+  }
 
   return (
     <div className="h-[100dvh] min-h-[100svh] w-screen bg-[#080B10] text-white flex flex-col overflow-hidden">
@@ -619,8 +669,20 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
           <ShieldCheck className="w-4 h-4 text-emerald-400" /><span className="hidden sm:inline">Meeting ID: </span><span className="max-w-[120px] truncate">{meetingId}</span>
           {!isGuest && <button title="Copy guest invite — no account required" className="ml-1 p-1 rounded hover:bg-white/10" onClick={copyGuestLink}><Copy className="w-3.5 h-3.5" /></button>}
         </div>
-        <div className="text-xs sm:text-sm text-white/60">{count} <span className="hidden sm:inline">{count === 1 ? 'participant' : 'participants'}</span></div>
+        <button onClick={() => setPanel((p) => (p === 'people' ? null : 'people'))} className="relative shrink-0" title="Participants">
+          <img src={currentUser?.avatar} alt="" className="w-8 h-8 rounded-full ring-2 ring-white/10" />
+          <span className="absolute -bottom-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-brand-blue text-[10px] font-bold grid place-items-center">{count}</span>
+        </button>
       </div>
+
+      {isHost && pendingRequests.length > 0 && (
+        <div className="shrink-0 bg-brand-blue/15 border-b border-brand-blue/20 px-3 sm:px-5 py-2 flex items-center gap-3">
+          <img src={pendingRequests[0].avatar || fallbackAvatar(pendingRequests[0].name)} className="w-7 h-7 rounded-full shrink-0" alt="" />
+          <p className="flex-1 min-w-0 text-sm truncate"><span className="font-semibold">{pendingRequests[0].name}</span> wants to join{pendingRequests.length > 1 ? ` · +${pendingRequests.length - 1} more waiting` : ''}</p>
+          <button onClick={() => respondAdmission(pendingRequests[0].requestId, 'deny')} className="h-8 px-3 rounded-lg bg-white/10 hover:bg-white/15 text-xs font-semibold">Deny</button>
+          <button onClick={() => respondAdmission(pendingRequests[0].requestId, 'admit')} className="h-8 px-3 rounded-lg bg-brand-blue hover:bg-brand-bluehover text-xs font-semibold flex items-center gap-1"><Check className="w-3.5 h-3.5" /> Admit</button>
+        </div>
+      )}
 
       {mediaError && (
         <div className="shrink-0 bg-amber-500/15 border-b border-amber-400/20 px-5 py-2 flex items-center gap-2 text-sm text-amber-200">
@@ -698,6 +760,19 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
             )}
             {panel === 'people' && (
               <div className="flex-1 overflow-y-auto p-2">
+                {isHost && pendingRequests.length > 0 && (
+                  <div className="mb-2 pb-2 border-b border-white/10">
+                    <p className="px-3 py-1.5 text-[11px] uppercase tracking-wide text-white/40 font-semibold">Waiting room ({pendingRequests.length})</p>
+                    {pendingRequests.map((r) => (
+                      <div key={r.requestId} className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/5">
+                        <img src={r.avatar || fallbackAvatar(r.name)} className="w-8 h-8 rounded-full" alt="" />
+                        <span className="flex-1 text-sm truncate">{r.name}{r.guest ? ' · Guest' : ''}</span>
+                        <button onClick={() => respondAdmission(r.requestId, 'deny')} title="Deny" className="grid h-7 w-7 place-items-center rounded-md text-white/60 hover:bg-white/10 hover:text-white"><X className="h-3.5 w-3.5" /></button>
+                        <button onClick={() => respondAdmission(r.requestId, 'admit')} title="Admit" className="grid h-7 w-7 place-items-center rounded-md text-brand-blue hover:bg-brand-blue/15"><Check className="h-3.5 w-3.5" /></button>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <PersonRow name={isGuest ? 'You (Guest)' : isHost ? 'You (Host)' : 'You'} url={currentUser?.avatar} mic={mic} cam={cam && hasCamera} hand={handUp} sharing={sharing} />
                 {remoteList.map(([peerId, p]) => (
                   <PersonRow key={peerId} name={p.name || 'Guest'} url={p.avatar} mic={p.mic !== false} cam={p.cam !== false} hand={p.hand} sharing={p.sharing}
@@ -711,80 +786,62 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
         )}
       </div>
 
-      {mobileMore && (
-        <div className="fixed inset-x-3 bottom-[calc(78px+env(safe-area-inset-bottom))] z-50 rounded-3xl border border-white/10 bg-[#171B22]/95 p-3 shadow-2xl backdrop-blur-xl sm:hidden">
-          <div className="mb-2 flex items-center justify-between px-1"><p className="text-sm font-bold">Meeting tools</p><button onClick={() => setMobileMore(false)} className="grid h-8 w-8 place-items-center rounded-full bg-white/10"><X className="h-4 w-4" /></button></div>
-          <div className="grid grid-cols-3 gap-2">
-            <SheetAction icon={MessageSquare} label="Chat" active={panel === 'chat'} onClick={() => { setPanel('chat'); setMobileMore(false) }} />
-            <SheetAction icon={Hand} label={handUp ? 'Lower hand' : 'Raise hand'} active={handUp} onClick={() => { toggleHand(); setMobileMore(false) }} />
-            <SheetAction icon={SwitchCamera} label="Flip camera" onClick={cycleCamera} />
-            {!isGuest && <SheetAction icon={recording ? Square : Disc} label={recording ? 'Stop record' : 'Record'} active={recording} onClick={() => { toggleRecord(); setMobileMore(false) }} />}
-            {!isGuest && <SheetAction icon={Sparkles} label={aiTakingNotes ? 'Stop AI' : 'AI Notes'} active={aiTakingNotes} onClick={() => { toggleAiNotes(); setMobileMore(false) }} />}
-            {!isGuest && <SheetAction icon={UserPlus} label="Invite" onClick={() => { copyGuestLink(); setMobileMore(false) }} />}
+      <div className="fixed inset-x-0 bottom-0 z-40 pb-[calc(10px+env(safe-area-inset-bottom))] pt-2 px-2 flex items-center justify-center gap-2 sm:static sm:pb-6 sm:pt-0">
+        <div className="relative flex items-center gap-1 sm:gap-1.5 rounded-full bg-[#0B0E14]/95 ring-1 ring-white/10 shadow-2xl backdrop-blur-xl px-1.5 py-1.5 sm:px-2">
+          <RoundBtn icon={mic ? Mic : MicOff} danger={!mic} onClick={toggleMic} disabled={!mediaReady} label={mic ? 'Mute' : 'Unmute'} />
+          <RoundBtn icon={cam ? VideoIcon : VideoOff} danger={!cam} onClick={toggleCam} disabled={!mediaReady || !hasCamera} label={cam ? 'Stop video' : 'Start video'} />
+          <RoundBtn icon={sharing ? MonitorUp : ScreenShare} active={sharing} onClick={toggleShare} disabled={!mediaReady} label={sharing ? 'Stop sharing' : 'Share screen'} className="hidden sm:grid" />
+          <div className="relative">
+            <RoundBtn icon={Smile} active={reactPicker} onClick={() => setReactPicker((v) => !v)} label="React" className="hidden sm:grid" />
+            {reactPicker && (
+              <div className="absolute bottom-16 left-1/2 -translate-x-1/2 bg-[#1B2029] border border-white/10 rounded-2xl px-2 py-2 flex gap-1 shadow-xl animate-pop">
+                {EMOJIS.map((e) => <button key={e} onClick={() => react(e)} className="w-9 h-9 grid place-items-center rounded-lg hover:bg-white/10 text-xl">{e}</button>)}
+              </div>
+            )}
           </div>
-        </div>
-      )}
+          <RoundBtn icon={Hand} active={handUp} onClick={toggleHand} label={handUp ? 'Lower hand' : 'Raise hand'} className="hidden sm:grid" />
+          <div className="relative">
+            <RoundBtn icon={MoreHorizontal} active={moreSheet} onClick={() => setMoreSheet((v) => !v)} label="More" />
+            {deviceMenu && (
+              <div className="absolute bottom-16 right-0 w-64 bg-[#1B2029] border border-white/10 rounded-xl p-2 shadow-xl animate-pop text-left">
+                <div className="flex items-center justify-between px-1 pb-1"><p className="text-xs font-semibold text-white/70">Devices</p><button onClick={() => setDeviceMenu(false)} className="p-1 rounded hover:bg-white/10 text-white/60"><X className="w-3.5 h-3.5" /></button></div>
+                <DeviceGroup label="Camera" items={devices.cameras} selected={chosen.camera} onPick={(d) => switchDevice('camera', d)} />
+                <DeviceGroup label="Microphone" items={devices.mics} selected={chosen.mic} onPick={(d) => switchDevice('mic', d)} />
+                <div className="mt-1 border-t border-white/10 pt-1">
+                  <button onClick={() => setFitVideo((value) => !value)} className="w-full rounded-lg px-2 py-2 text-left text-xs text-white/80 hover:bg-white/10">
+                    Camera framing: <span className="font-semibold text-white">{fitVideo ? 'Fit full frame' : 'Fill tile'}</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+          <button onClick={leave} aria-label="Leave meeting" title="Leave" className="grid h-11 w-11 sm:h-12 sm:w-12 place-items-center rounded-full bg-red-500 transition hover:bg-red-600 ml-0.5"><PhoneOff className="w-5 h-5" /></button>
 
-      <div className="fixed inset-x-0 bottom-0 z-40 min-h-[calc(72px+env(safe-area-inset-bottom))] shrink-0 border-t border-white/10 bg-[#0B0E14]/95 px-1 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl flex items-center justify-around gap-0 sm:static sm:min-h-[76px] sm:justify-center sm:gap-2 sm:px-5 sm:pb-0">
-        <Ctrl active={mic} onClick={toggleMic} disabled={!mediaReady} on={{ icon: Mic, label: 'Mute' }} off={{ icon: MicOff, label: 'Unmute' }} danger={!mic} />
-        <Ctrl active={cam} onClick={toggleCam} disabled={!mediaReady || !hasCamera} on={{ icon: VideoIcon, label: 'Stop Video' }} off={{ icon: VideoOff, label: 'Start Video' }} danger={!cam} />
-        <div className="relative hidden sm:block">
-          <CtrlBtn icon={Settings2} label="Devices" active={deviceMenu} onClick={() => { refreshDevices(); setDeviceMenu((v) => !v) }} />
-          {deviceMenu && (
-            <div className="absolute bottom-16 left-1/2 -translate-x-1/2 w-64 bg-[#1B2029] border border-white/10 rounded-xl p-2 shadow-xl animate-pop text-left">
-              <DeviceGroup label="Camera" items={devices.cameras} selected={chosen.camera} onPick={(d) => switchDevice('camera', d)} />
-              <DeviceGroup label="Microphone" items={devices.mics} selected={chosen.mic} onPick={(d) => switchDevice('mic', d)} />
-              <div className="mt-1 border-t border-white/10 pt-1">
-                <button onClick={() => setFitVideo((value) => !value)} className="w-full rounded-lg px-2 py-2 text-left text-xs text-white/80 hover:bg-white/10">
-                  Camera framing: <span className="font-semibold text-white">{fitVideo ? 'Fit full frame' : 'Fill tile'}</span>
-                </button>
+          {moreSheet && (
+            <div className="absolute inset-x-3 bottom-[calc(100%+10px)] sm:inset-x-auto sm:right-0 sm:w-72 rounded-3xl border border-white/10 bg-[#171B22]/95 p-3 shadow-2xl backdrop-blur-xl">
+              <div className="mb-2 flex items-center justify-between px-1"><p className="text-sm font-bold">Meeting tools</p><button onClick={() => setMoreSheet(false)} className="grid h-8 w-8 place-items-center rounded-full bg-white/10"><X className="h-4 w-4" /></button></div>
+              <div className="grid grid-cols-3 gap-2">
+                <div className="contents sm:hidden">
+                  <SheetAction icon={ScreenShare} label={sharing ? 'Stop share' : 'Share'} active={sharing} onClick={() => { toggleShare(); setMoreSheet(false) }} />
+                  <SheetAction icon={Smile} label="React" onClick={() => { setReactPicker(true); setMoreSheet(false) }} />
+                  <SheetAction icon={Hand} label={handUp ? 'Lower hand' : 'Raise hand'} active={handUp} onClick={() => { toggleHand(); setMoreSheet(false) }} />
+                  <SheetAction icon={MessageSquare} label="Chat" active={panel === 'chat'} onClick={() => { setPanel('chat'); setMoreSheet(false) }} />
+                  <SheetAction icon={Users} label="Participants" active={panel === 'people'} onClick={() => { setPanel('people'); setMoreSheet(false) }} />
+                </div>
+                <SheetAction icon={SwitchCamera} label="Flip camera" onClick={() => { cycleCamera(); setMoreSheet(false) }} />
+                <SheetAction icon={Settings2} label="Devices" active={deviceMenu} onClick={() => { refreshDevices(); setDeviceMenu(true); setMoreSheet(false) }} />
+                {!isGuest && <SheetAction icon={recording ? Square : Disc} label={recording ? 'Stop record' : 'Record'} active={recording} onClick={() => { toggleRecord(); setMoreSheet(false) }} />}
+                {!isGuest && <SheetAction icon={Sparkles} label={aiTakingNotes ? 'Stop AI' : 'AI Notes'} active={aiTakingNotes} onClick={() => { toggleAiNotes(); setMoreSheet(false) }} />}
+                {!isGuest && <SheetAction icon={UserPlus} label="Invite" onClick={() => { copyGuestLink(); setMoreSheet(false) }} />}
               </div>
             </div>
           )}
         </div>
-        <CtrlBtn icon={sharing ? MonitorUp : ScreenShare} label={sharing ? 'Stop Share' : 'Share'} active={sharing} onClick={toggleShare} disabled={!mediaReady} />
-        <CtrlBtn icon={Users} label="Participants" active={panel === 'people'} onClick={() => setPanel((p) => (p === 'people' ? null : 'people'))} />
-        <div className="hidden sm:contents"><CtrlBtn icon={MessageSquare} label="Chat" active={panel === 'chat'} onClick={() => setPanel((p) => (p === 'chat' ? null : 'chat'))} /></div>
-        <div className="hidden sm:contents"><CtrlBtn icon={Hand} label="Raise Hand" active={handUp} onClick={toggleHand} /></div>
-        <div className="relative hidden sm:block">
-          <CtrlBtn icon={Smile} label="React" active={reactPicker} onClick={() => setReactPicker((v) => !v)} />
-          {reactPicker && (
-            <div className="absolute bottom-16 left-1/2 -translate-x-1/2 bg-[#1B2029] border border-white/10 rounded-2xl px-2 py-2 flex gap-1 shadow-xl animate-pop">
-              {EMOJIS.map((e) => <button key={e} onClick={() => react(e)} className="w-9 h-9 grid place-items-center rounded-lg hover:bg-white/10 text-xl">{e}</button>)}
-            </div>
-          )}
+
+        <div className="hidden sm:flex items-center gap-2">
+          <RoundBtn icon={MessageSquare} active={panel === 'chat'} onClick={() => setPanel((p) => (p === 'chat' ? null : 'chat'))} label="Chat" />
+          <RoundBtn icon={Users} active={panel === 'people'} onClick={() => setPanel((p) => (p === 'people' ? null : 'people'))} label="Participants" badge={pendingRequests.length || null} />
         </div>
-        {!isGuest && <div className="hidden sm:contents">
-          <CtrlBtn
-            icon={Sparkles}
-            label={aiTakingNotes ? 'Stop AI' : 'AI Notes'}
-            active={aiTakingNotes}
-            onClick={toggleAiNotes}
-            disabled={!mediaReady || saving > 0}
-            title="Record, transcribe, and summarize this meeting"
-          />
-        </div>}
-        {!isGuest && <div className="hidden sm:contents">
-          <CtrlBtn
-            icon={recording ? Square : Disc}
-            label={recording ? 'Stop Rec' : mediaReady ? 'Record' : 'Preparing…'}
-            active={recording}
-            onClick={toggleRecord}
-            disabled={!mediaReady || saving > 0}
-            title={mediaReady ? 'Record this meeting' : 'Waiting for your camera and microphone'}
-          />
-        </div>}
-        {!isGuest && <div className="hidden sm:contents">
-          <CtrlBtn
-            icon={UserPlus}
-            label="Invite"
-            onClick={copyGuestLink}
-            disabled={guestLinkBusy}
-            title="Copy a link that lets anyone join as a guest"
-          />
-        </div>}
-        <div className="sm:hidden"><CtrlBtn icon={MoreHorizontal} label="More" active={mobileMore} onClick={() => setMobileMore((open) => !open)} /></div>
-        <button onClick={leave} aria-label="Leave meeting" className="grid h-11 w-11 place-items-center rounded-full bg-red-500 transition hover:bg-red-600 sm:ml-3 sm:flex sm:w-auto sm:px-5 sm:rounded-xl sm:font-semibold sm:gap-2"><PhoneOff className="w-4.5 h-4.5" /><span className="hidden sm:inline">Leave</span></button>
       </div>
     </div>
   )
@@ -842,21 +899,19 @@ function PersonRow({ name, url, mic, cam, hand, sharing, canModerate, onMute, on
   )
 }
 
-function Ctrl({ active, onClick, on, off, danger, disabled }) {
-  const info = active ? on : off; const Icon = info.icon
+// Circular, icon-only control button — the Meet-style pill is built from these.
+function RoundBtn({ icon: Icon, label, onClick, active, danger, disabled, small, badge, className = '' }) {
+  const size = small ? 'h-10 w-10' : 'h-11 w-11 sm:h-12 sm:w-12'
   return (
-    <button onClick={onClick} disabled={disabled} className="flex min-w-[48px] flex-col items-center gap-1 rounded-xl px-1.5 py-1.5 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent sm:min-w-[62px] sm:px-3">
-      <Icon className={`w-5 h-5 ${danger ? 'text-red-400' : 'text-white'}`} />
-      <span className="text-[11px] text-white/70">{info.label}</span>
-    </button>
-  )
-}
-
-function CtrlBtn({ icon: Icon, label, onClick, active, disabled, title }) {
-  return (
-    <button onClick={onClick} disabled={disabled} title={title || label} className={`flex min-w-[48px] flex-col items-center gap-1 rounded-xl px-1.5 py-1.5 transition disabled:cursor-not-allowed disabled:opacity-40 sm:min-w-[62px] sm:px-3 ${active ? 'bg-white/15' : 'hover:bg-white/10 disabled:hover:bg-transparent'}`}>
-      <Icon className="w-5 h-5 text-white" />
-      <span className="text-[11px] text-white/70">{label}</span>
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={label}
+      aria-label={label}
+      className={`relative grid place-items-center rounded-full transition disabled:cursor-not-allowed disabled:opacity-40 ${size} ${active ? 'bg-white text-[#0B0E14]' : 'bg-white/10 hover:bg-white/15 disabled:hover:bg-white/10'} ${className}`}
+    >
+      <Icon className={`${small ? 'w-4 h-4' : 'w-5 h-5'} ${danger && !active ? 'text-red-400' : active ? 'text-[#0B0E14]' : 'text-white'}`} />
+      {badge > 0 && <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-brand-blue text-white text-[10px] font-bold grid place-items-center">{badge}</span>}
     </button>
   )
 }

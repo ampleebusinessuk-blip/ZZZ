@@ -18,6 +18,13 @@ export function attachRealtime(server) {
   // roomId -> Set<ws>   (meeting rooms for WebRTC signaling)
   const rooms = new Map()
   const roomHosts = new Map()
+  // roomId -> Map<peerId, { ws, name, avatar, guest }>  (Zoom-style waiting room:
+  // everyone except the host sits here until the host admits or denies them)
+  const pendingByRoom = new Map()
+  // roomId -> Set<userId>  (already admitted once — a dropped wifi/mobile
+  // reconnect re-sends join-room automatically and should slide straight back
+  // in, not land the participant back in the lobby mid-call)
+  const admittedByRoom = new Map()
   // boardId -> Set<ws>  (collaborative whiteboard rooms)
   const boards = new Map()
 
@@ -84,7 +91,7 @@ export function attachRealtime(server) {
          rooms, workspace channels, whiteboards, notifications — is refused here
          rather than relying on each handler to remember. */
       if (meta.guest) {
-        const allowed = ['chat', 'join-room', 'leave-room', 'signal', 'room-event']
+        const allowed = ['chat', 'join-room', 'leave-room', 'cancel-join', 'signal', 'room-event']
         if (!allowed.includes(msg.type)) return send(ws, { type: 'error', error: 'not permitted for guests' })
         if (msg.type === 'chat' && msg.channelId !== `room:${meta.room}`) return send(ws, { type: 'error', error: 'channel access denied' })
         if ((msg.type === 'join-room' || msg.type === 'room-event') && msg.roomId !== meta.room) {
@@ -121,6 +128,7 @@ export function attachRealtime(server) {
             const members = channelId.slice(3).split('__')
             broadcast(payload, (m) => members.includes(m.userId))
           } else if (channelId.startsWith('room:')) {
+            if (ws.roomId !== channelId.slice(5)) return // still in the waiting room — no call access yet
             const set = rooms.get(channelId.slice(5))
             if (set) for (const p of set) send(p, payload)
           } else {
@@ -175,20 +183,49 @@ export function attachRealtime(server) {
           const { roomId } = msg
           if (!roomId) return
           if (!rooms.has(roomId)) rooms.set(roomId, new Set())
-          const room = rooms.get(roomId)
-          // tell the newcomer about existing peers
-          const peers = [...room].filter((p) => p !== ws && clients.has(p)).map((p) => {
-            const pm = clients.get(p)
-            return { peerId: pm.id, name: pm.name, avatar: pm.avatar }
-          })
-          send(ws, { type: 'peers', peers })
-          room.add(ws)
-          ws.roomId = roomId
-          if (!meta.guest && !roomHosts.has(roomId)) roomHosts.set(roomId, meta.id)
-          send(ws, { type: 'room-role', host: roomHosts.get(roomId) === meta.id })
-          // notify existing peers of the newcomer
-          for (const p of room) {
-            if (p !== ws) send(p, { type: 'peer-joined', peerId: meta.id, name: meta.name, avatar: meta.avatar })
+
+          // The first signed-in member to reach an empty room starts it and is
+          // its host outright — nobody to admit them. Everyone else, member or
+          // guest, waits in the lobby until that host lets them in.
+          if (!meta.guest && !roomHosts.has(roomId)) {
+            roomHosts.set(roomId, meta.id)
+            finalizeJoin(ws, meta, roomId)
+            flushPendingAdmissions(roomId)
+            break
+          }
+
+          // Already admitted earlier in this room's lifetime (e.g. reconnecting
+          // after a brief network drop) — skip the lobby, rejoin directly.
+          if (admittedByRoom.get(roomId)?.has(meta.userId)) {
+            finalizeJoin(ws, meta, roomId)
+            break
+          }
+
+          if (!pendingByRoom.has(roomId)) pendingByRoom.set(roomId, new Map())
+          pendingByRoom.get(roomId).set(meta.id, { ws, name: meta.name, avatar: meta.avatar, guest: !!meta.guest })
+          send(ws, { type: 'waiting-for-admission' })
+          notifyHostOfPending(roomId, meta)
+          break
+        }
+        case 'cancel-join': {
+          removeFromPending(ws)
+          break
+        }
+        // Only the current host may admit or deny someone waiting in their room.
+        case 'admission-response': {
+          const { roomId, requestId, action } = msg
+          if (!roomId || !requestId || !['admit', 'deny'].includes(action)) return
+          if (meta.guest || roomHosts.get(roomId) !== meta.id) return send(ws, { type: 'error', error: 'host permission required' })
+          const pending = pendingByRoom.get(roomId)
+          const entry = pending?.get(requestId)
+          if (!entry) return
+          pending.delete(requestId)
+          if (pending.size === 0) pendingByRoom.delete(roomId)
+          if (action === 'admit') {
+            const admittedMeta = clients.get(entry.ws)
+            if (admittedMeta && entry.ws.readyState === entry.ws.OPEN) finalizeJoin(entry.ws, admittedMeta, roomId)
+          } else {
+            send(entry.ws, { type: 'admission-denied' })
           }
           break
         }
@@ -206,6 +243,7 @@ export function attachRealtime(server) {
         }
         // Reactions, raise-hand, etc. relayed to everyone in the call.
         case 'room-event': {
+          if (ws.roomId !== msg.roomId) return // still in the waiting room — no call access yet
           const set = rooms.get(msg.roomId)
           if (set) for (const p of set) if (p !== ws) send(p, { type: 'room-event', event: { ...msg.event, from: meta.id } })
           break
@@ -228,12 +266,69 @@ export function attachRealtime(server) {
     ws.on('close', () => {
       const meta = clients.get(ws)
       leaveRoom(ws)
+      removeFromPending(ws)
       const bset = boards.get(ws.boardId)
       if (bset) { bset.delete(ws); if (bset.size === 0) boards.delete(ws.boardId) }
       clients.delete(ws)
       if (!meta?.guest) pushPresence()
     })
   })
+
+  // Admits a waiting (or brand-new host) connection into the actual call: hands
+  // them the current roster, adds them to the room, and announces them to peers.
+  function finalizeJoin(ws, meta, roomId) {
+    const room = rooms.get(roomId)
+    const peers = [...room].filter((p) => p !== ws && clients.has(p)).map((p) => {
+      const pm = clients.get(p)
+      return { peerId: pm.id, name: pm.name, avatar: pm.avatar }
+    })
+    send(ws, { type: 'peers', peers })
+    room.add(ws)
+    ws.roomId = roomId
+    if (!admittedByRoom.has(roomId)) admittedByRoom.set(roomId, new Set())
+    admittedByRoom.get(roomId).add(meta.userId)
+    send(ws, { type: 'room-role', host: roomHosts.get(roomId) === meta.id })
+    for (const p of room) {
+      if (p !== ws) send(p, { type: 'peer-joined', peerId: meta.id, name: meta.name, avatar: meta.avatar })
+    }
+  }
+
+  function findHostWs(roomId) {
+    const hostId = roomHosts.get(roomId)
+    const room = rooms.get(roomId)
+    if (!hostId || !room) return null
+    for (const p of room) if (clients.get(p)?.id === hostId) return p
+    return null
+  }
+
+  function notifyHostOfPending(roomId, meta) {
+    const hostWs = findHostWs(roomId)
+    if (hostWs) send(hostWs, { type: 'admission-request', requestId: meta.id, name: meta.name, avatar: meta.avatar, guest: !!meta.guest })
+  }
+
+  // Re-announces anyone still waiting once a room gets a (new) host — e.g. a
+  // guest arrived before the host started the meeting, or the host handed off.
+  function flushPendingAdmissions(roomId) {
+    const pending = pendingByRoom.get(roomId)
+    const hostWs = findHostWs(roomId)
+    if (!pending || !hostWs) return
+    for (const [requestId, p] of pending) {
+      send(hostWs, { type: 'admission-request', requestId, name: p.name, avatar: p.avatar, guest: p.guest })
+    }
+  }
+
+  function removeFromPending(ws) {
+    for (const [roomId, pending] of pendingByRoom) {
+      for (const [requestId, p] of pending) {
+        if (p.ws !== ws) continue
+        pending.delete(requestId)
+        if (pending.size === 0) pendingByRoom.delete(roomId)
+        const hostWs = findHostWs(roomId)
+        if (hostWs) send(hostWs, { type: 'admission-cancelled', requestId })
+        return
+      }
+    }
+  }
 
   function leaveRoom(ws) {
     const roomId = ws.roomId
@@ -242,13 +337,14 @@ export function attachRealtime(server) {
     room.delete(ws)
     const meta = clients.get(ws)
     for (const p of room) send(p, { type: 'peer-left', peerId: meta?.id })
-    if (room.size === 0) { rooms.delete(roomId); roomHosts.delete(roomId) }
+    if (room.size === 0) { rooms.delete(roomId); roomHosts.delete(roomId); pendingByRoom.delete(roomId); admittedByRoom.delete(roomId) }
     else if (roomHosts.get(roomId) === meta?.id) {
       const nextHost = [...room].find((p) => !clients.get(p)?.guest)
       if (nextHost) {
         const nextMeta = clients.get(nextHost)
         roomHosts.set(roomId, nextMeta.id)
         send(nextHost, { type: 'room-role', host: true })
+        flushPendingAdmissions(roomId)
       } else roomHosts.delete(roomId)
     }
     ws.roomId = null
