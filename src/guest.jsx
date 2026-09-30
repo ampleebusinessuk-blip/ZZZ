@@ -12,7 +12,7 @@ const uid = () => (globalThis.crypto?.randomUUID?.() || Math.random().toString(3
   That keeps MeshRoom identical for members and guests.
 */
 const guestSettings = {
-  hd: true, mirror: true, suppressNoise: true,
+  hd: true, mirror: true, autoJoin: true, suppressNoise: true,
   joinSound: false, desktopNotif: false, notifSound: false, theme: 'Light',
 }
 

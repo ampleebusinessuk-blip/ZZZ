@@ -25,9 +25,6 @@ export function attachRealtime(server) {
   // reconnect re-sends join-room automatically and should slide straight back
   // in, not land the participant back in the lobby mid-call)
   const admittedByRoom = new Map()
-  // roomId -> true  (the host explicitly ended it — refuse every join from
-  // here on, including the host's own reconnect, until a new roomId is used)
-  const endedRooms = new Set()
   // boardId -> Set<ws>  (collaborative whiteboard rooms)
   const boards = new Map()
 
@@ -185,7 +182,6 @@ export function attachRealtime(server) {
         case 'join-room': {
           const { roomId } = msg
           if (!roomId) return
-          if (endedRooms.has(roomId)) return send(ws, { type: 'meeting-ended' })
           if (!rooms.has(roomId)) rooms.set(roomId, new Set())
 
           // The first signed-in member to reach an empty room starts it and is
@@ -231,24 +227,6 @@ export function attachRealtime(server) {
           } else {
             send(entry.ws, { type: 'admission-denied' })
           }
-          break
-        }
-        // Host-only, and final: every current participant is dropped, anyone
-        // still waiting to be admitted is turned away, and the room refuses
-        // every join from here on rather than quietly reopening for the next
-        // person who follows the same link.
-        case 'end-meeting': {
-          const { roomId } = msg
-          if (!roomId || meta.guest || roomHosts.get(roomId) !== meta.id) return send(ws, { type: 'error', error: 'host permission required' })
-          endedRooms.add(roomId)
-          const room = rooms.get(roomId)
-          if (room) for (const p of room) send(p, { type: 'meeting-ended' })
-          const pending = pendingByRoom.get(roomId)
-          if (pending) for (const p of pending.values()) send(p.ws, { type: 'meeting-ended' })
-          rooms.delete(roomId)
-          roomHosts.delete(roomId)
-          pendingByRoom.delete(roomId)
-          admittedByRoom.delete(roomId)
           break
         }
         case 'signal': {
