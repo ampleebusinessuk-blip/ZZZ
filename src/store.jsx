@@ -15,7 +15,7 @@ const uid = () => (globalThis.crypto?.randomUUID?.() || Math.random().toString(3
 const STATE_SLICES = ['docs', 'notes', 'notifications', 'settings']
 
 const defaultSettings = {
-  hd: true, mirror: true, touchup: false, autoJoin: true,
+  hd: true, mirror: true, touchup: false,
   suppressNoise: true, joinSound: false, desktopNotif: true, notifSound: false,
   waitingRoom: true, theme: 'Light',
 }

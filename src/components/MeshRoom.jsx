@@ -29,8 +29,8 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
   const settings = state.settings || {}
   const mirror = settings.mirror !== false
 
-  const [mic, setMic] = useState(true)
-  const [cam, setCam] = useState(settings.autoJoin !== false)
+  const [mic, setMic] = useState(false)
+  const [cam, setCam] = useState(false)
   const [mediaError, setMediaError] = useState('')
   // Local media takes a moment to open. Until it is ready the capture controls
   // stay disabled, otherwise an eager click just reports "nothing to record".
@@ -46,7 +46,10 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
   // 'connecting' until the server says otherwise; everyone but the meeting's
   // host waits here for a host to admit them — the same flow as Zoom's lobby.
   const [admission, setAdmission] = useState('connecting')
+  const admissionRef = useRef('connecting')
+  useEffect(() => { admissionRef.current = admission }, [admission])
   const [pendingRequests, setPendingRequests] = useState([])
+  const [endMenu, setEndMenu] = useState(false)
   const [panel, setPanel] = useState(null)
   const [reactPicker, setReactPicker] = useState(false)
   const [deviceMenu, setDeviceMenu] = useState(false)
@@ -231,13 +234,16 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
     setMediaReady(false)
 
     async function start() {
-      // Honour the choices made in the Join dialog (?muted=1 / ?novideo=1).
+      // Off by default: joining a call shouldn't put you on-air before you've
+      // chosen to be. ?unmuted=1 / ?video=1 are the only way to start visible —
+      // the device is still acquired either way so the in-call toggle is
+      // instant, not a fresh permission prompt.
       const url = new URLSearchParams(window.location.search)
-      const joinMuted = url.get('muted') === '1'
-      const wantVideo = url.get('novideo') === '1' ? false : settings.autoJoin !== false
+      const joinMuted = url.get('unmuted') === '1' ? false : true
+      const wantVideo = url.get('video') === '1' ? true : false
       let stream = null
       try {
-        stream = await navigator.mediaDevices.getUserMedia(buildConstraints(wantVideo))
+        stream = await navigator.mediaDevices.getUserMedia(buildConstraints(true))
       } catch (err) {
         // Fall back to audio-only rather than joining with nothing at all.
         try {
@@ -362,6 +368,16 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
         }
       }),
       rt.on('room-role', ({ host }) => setIsHost(Boolean(host))),
+      // Fires both for someone already in the call (host just ended it) and for
+      // someone whose join attempt landed on an already-ended room.
+      rt.on('meeting-ended', () => {
+        if (admissionRef.current === 'admitted') {
+          toast('The host ended this meeting', 'info')
+          setTimeout(() => (onLeave ? onLeave() : navigate('/')), 250)
+        } else {
+          setAdmission('ended')
+        }
+      }),
     ]
 
     return () => {
@@ -596,6 +612,9 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
 
   const sendChat = () => { if (text.trim()) { rt.send({ type: 'chat', channelId: `room:${roomId}`, text: text.trim() }); setText('') } }
   const leave = () => (onLeave ? onLeave() : navigate('/'))
+  // Distinct from leaving: this tears the room down for everyone and refuses
+  // any further join attempts, not just the host's own connection.
+  const endMeeting = () => { rt.send({ type: 'end-meeting', roomId }); leave() }
   const respondAdmission = (requestId, action) => {
     rt.send({ type: 'admission-response', roomId, requestId, action })
     setPendingRequests((prev) => prev.filter((r) => r.requestId !== requestId))
@@ -619,28 +638,37 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
   const selfMirrored = mirror && !sharing
   const showSelfVideo = (cam && hasCamera) || sharing
 
-  if (admission === 'waiting' || admission === 'denied') {
+  if (admission === 'waiting' || admission === 'denied' || admission === 'ended') {
     return (
       <div className="h-[100dvh] min-h-[100svh] w-screen bg-[#080B10] text-white flex flex-col items-center justify-center gap-6 px-6 text-center">
-        <div className="relative w-full max-w-sm aspect-video rounded-2xl overflow-hidden bg-[#171B22] ring-1 ring-white/10 grid place-items-center">
-          <video ref={localVideoRef} autoPlay muted playsInline className={`w-full h-full bg-black object-cover ${showSelfVideo ? '' : 'hidden'} ${selfMirrored ? '-scale-x-100' : ''}`} />
-          {!showSelfVideo && <img src={currentUser?.avatar} alt="You" className="w-20 h-20 rounded-full object-cover opacity-90" />}
-          {mediaReady && (
-            <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-2">
-              <RoundBtn small danger={!mic} icon={mic ? Mic : MicOff} onClick={toggleMic} label={mic ? 'Mute' : 'Unmute'} />
-              <RoundBtn small danger={!cam} icon={cam ? VideoIcon : VideoOff} onClick={toggleCam} label={cam ? 'Stop video' : 'Start video'} disabled={!hasCamera} />
-            </div>
-          )}
-        </div>
-        {admission === 'waiting' ? (
+        {admission === 'waiting' && (
+          <div className="relative w-full max-w-sm aspect-video rounded-2xl overflow-hidden bg-[#171B22] ring-1 ring-white/10 grid place-items-center">
+            <video ref={localVideoRef} autoPlay muted playsInline className={`w-full h-full bg-black object-cover ${showSelfVideo ? '' : 'hidden'} ${selfMirrored ? '-scale-x-100' : ''}`} />
+            {!showSelfVideo && <img src={currentUser?.avatar} alt="You" className="w-20 h-20 rounded-full object-cover opacity-90" />}
+            {mediaReady && (
+              <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-2">
+                <RoundBtn small danger={!mic} icon={mic ? Mic : MicOff} onClick={toggleMic} label={mic ? 'Mute' : 'Unmute'} />
+                <RoundBtn small danger={!cam} icon={cam ? VideoIcon : VideoOff} onClick={toggleCam} label={cam ? 'Stop video' : 'Start video'} disabled={!hasCamera} />
+              </div>
+            )}
+          </div>
+        )}
+        {admission === 'waiting' && (
           <>
             <div className="flex items-center gap-2 text-white/80"><Loader2 className="w-4 h-4 animate-spin" /><p className="font-semibold">Waiting for the host to let you in</p></div>
             <p className="text-sm text-white/50 max-w-xs">The host has been notified. You'll join the call as soon as they admit you.</p>
           </>
-        ) : (
+        )}
+        {admission === 'denied' && (
           <>
             <p className="font-semibold text-red-300">The host didn't admit you</p>
             <p className="text-sm text-white/50 max-w-xs">You weren't let into this meeting. You can try again if that was a mistake.</p>
+          </>
+        )}
+        {admission === 'ended' && (
+          <>
+            <p className="font-semibold text-white">This meeting has ended</p>
+            <p className="text-sm text-white/50 max-w-xs">The host ended it for everyone. Ask them for a new invite if you need to meet again.</p>
           </>
         )}
         <button onClick={leave} className="h-10 px-5 rounded-xl bg-white/10 hover:bg-white/15 text-sm font-semibold">
@@ -815,7 +843,23 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
               </div>
             )}
           </div>
-          <button onClick={leave} aria-label="Leave meeting" title="Leave" className="grid h-11 w-11 sm:h-12 sm:w-12 place-items-center rounded-full bg-red-500 transition hover:bg-red-600 ml-0.5"><PhoneOff className="w-5 h-5" /></button>
+          <div className="relative">
+            <button
+              onClick={() => (isHost ? setEndMenu((v) => !v) : leave())}
+              aria-label="Leave meeting" title="Leave"
+              className="grid h-11 w-11 sm:h-12 sm:w-12 place-items-center rounded-full bg-red-500 transition hover:bg-red-600 ml-0.5"
+            ><PhoneOff className="w-5 h-5" /></button>
+            {endMenu && (
+              <div className="absolute bottom-16 right-0 w-56 bg-[#1B2029] border border-white/10 rounded-xl p-1.5 shadow-xl animate-pop text-left">
+                <button onClick={leave} className="w-full rounded-lg px-3 py-2.5 text-left text-sm text-white/90 hover:bg-white/10">
+                  Leave meeting
+                </button>
+                <button onClick={endMeeting} className="w-full rounded-lg px-3 py-2.5 text-left text-sm text-red-400 hover:bg-red-500/15">
+                  End meeting for everyone
+                </button>
+              </div>
+            )}
+          </div>
 
           {moreSheet && (
             <div className="absolute inset-x-3 bottom-[calc(100%+10px)] sm:inset-x-auto sm:right-0 sm:w-72 rounded-3xl border border-white/10 bg-[#171B22]/95 p-3 shadow-2xl backdrop-blur-xl">

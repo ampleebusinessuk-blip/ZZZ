@@ -41,7 +41,7 @@ export default function Modals() {
   const navigate = useNavigate()
 
   const [joinId, setJoinId] = useState('')
-  const [joinOpts, setJoinOpts] = useState({ noAudio: false, noVideo: false })
+  const [joinOpts, setJoinOpts] = useState({ audioOn: false, videoOn: false })
   const [form, setForm] = useState(() => ({ title: 'My Meeting', ...nextSlot(), durationMins: 60, recurring: false }))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -60,7 +60,7 @@ export default function Modals() {
       setForm({ title: 'My Meeting', ...nextSlot(), durationMins: 60, recurring: false, ...(modal.data || {}) })
       setError('')
     }
-    if (modal?.type === 'join') { setJoinId(''); setJoinOpts({ noAudio: false, noVideo: false }); setError('') }
+    if (modal?.type === 'join') { setJoinId(''); setJoinOpts({ audioOn: false, videoOn: false }); setError('') }
   }, [modal?.type, modal?.data])
 
   useEffect(() => {
@@ -78,8 +78,8 @@ export default function Modals() {
       const fromLink = room.match(/(?:meeting|join)\/([^/?#]+)/)
       const target = fromLink ? fromLink[1] : room
       const params = new URLSearchParams()
-      if (joinOpts.noAudio) params.set('muted', '1')
-      if (joinOpts.noVideo) params.set('novideo', '1')
+      if (joinOpts.audioOn) params.set('unmuted', '1')
+      if (joinOpts.videoOn) params.set('video', '1')
       closeModal()
       navigate(`/meeting/${target}${params.toString() ? `?${params}` : ''}`)
     }
@@ -102,11 +102,12 @@ export default function Modals() {
           <p className="mt-2 text-xs text-ink-500">Joining as <span className="font-semibold text-ink-700">{currentUser.name}</span></p>
           {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
           <div className="mt-4 space-y-2.5">
+            <p className="text-xs text-ink-500">Mic and camera join off by default — turn them on here if you'd rather start visible.</p>
             <label className="flex items-center gap-2.5 text-sm text-ink-700">
-              <input type="checkbox" className="w-4 h-4 accent-brand-blue" checked={joinOpts.noAudio} onChange={(e) => setJoinOpts((o) => ({ ...o, noAudio: e.target.checked }))} /> Join muted
+              <input type="checkbox" className="w-4 h-4 accent-brand-blue" checked={joinOpts.audioOn} onChange={(e) => setJoinOpts((o) => ({ ...o, audioOn: e.target.checked }))} /> Join with mic on
             </label>
             <label className="flex items-center gap-2.5 text-sm text-ink-700">
-              <input type="checkbox" className="w-4 h-4 accent-brand-blue" checked={joinOpts.noVideo} onChange={(e) => setJoinOpts((o) => ({ ...o, noVideo: e.target.checked }))} /> Turn off my video
+              <input type="checkbox" className="w-4 h-4 accent-brand-blue" checked={joinOpts.videoOn} onChange={(e) => setJoinOpts((o) => ({ ...o, videoOn: e.target.checked }))} /> Join with video on
             </label>
           </div>
         </Shell>

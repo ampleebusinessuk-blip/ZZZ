@@ -20,7 +20,7 @@ export function defaultUserState() {
     notes: [],
     notifications: [],
     settings: {
-      hd: true, mirror: true, autoJoin: true,
+      hd: true, mirror: true,
       suppressNoise: true, joinSound: false, desktopNotif: true, notifSound: false,
       waitingRoom: true, theme: 'Light',
     },
