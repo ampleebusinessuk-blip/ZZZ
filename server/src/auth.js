@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken'
 import { config } from './config.js'
 import { db, q } from './db.js'
 import { defaultUserState } from './seed.js'
+import { initialsAvatar } from './avatar.js'
 
 const uid = () => crypto.randomUUID()
 const randomToken = (bytes = 32) => crypto.randomBytes(bytes).toString('base64url')
@@ -14,7 +15,6 @@ const COOKIE = config.isProduction ? '__Host-nexus_session' : 'nexus_session'
 const GUEST_COOKIE = config.isProduction ? '__Host-meet17_guest' : 'meet17_guest'
 const SESSION_MS = config.sessionDays * 24 * 60 * 60 * 1000
 const GUEST_SESSION_MS = 12 * 60 * 60 * 1000        // a guest pass lasts 12 hours
-const GUEST_INVITE_MS = 7 * 24 * 60 * 60 * 1000     // an invite link lasts 7 days
 
 const cookieOptions = () => ({ httpOnly: true, secure: config.isProduction, sameSite: 'strict', path: '/', maxAge: SESSION_MS })
 
@@ -52,7 +52,7 @@ export function registerUser({ email, name, password }) {
   if (passwordError) return { error: passwordError }
   const id = uid(), now = Date.now()
   const hash = bcrypt.hashSync(password, config.bcryptRounds)
-  const avatar = `https://i.pravatar.cc/150?u=${encodeURIComponent(email)}`
+  const avatar = initialsAvatar(name)
   db.exec('BEGIN')
   try {
     q.insertUser.run(id, email, name, hash, avatar, makePmi(), 'Enterprise', now)
@@ -154,7 +154,9 @@ export function verifyMfaChallenge(token) {
    can reach that room and nothing else in the workspace. */
 
 export function createGuestInvite(room, invitedBy) {
-  return jwt.sign({ room, purpose: 'guest-invite', by: invitedBy }, config.jwtSecret, { expiresIn: GUEST_INVITE_MS / 1000 })
+  // No expiresIn: this is meant to be a permanent, shareable link (e.g. a
+  // Personal Meeting Room invite) rather than a one-off that goes stale.
+  return jwt.sign({ room, purpose: 'guest-invite', by: invitedBy }, config.jwtSecret)
 }
 
 export function verifyGuestInvite(token) {
@@ -167,7 +169,7 @@ export function verifyGuestInvite(token) {
 export function createGuestSession(req, res, { room, name, invitedBy }) {
   const raw = randomToken(), csrfToken = randomToken(24), now = Date.now(), id = uid()
   q.purgeGuestSessions.run(now)
-  const avatar = `https://i.pravatar.cc/150?u=${encodeURIComponent('guest-' + id)}`
+  const avatar = initialsAvatar(name)
   q.insertGuestSession.run(id, digest(raw), csrfToken, room, name, avatar, invitedBy || null, now, now + GUEST_SESSION_MS)
   res.cookie(GUEST_COOKIE, raw, { httpOnly: true, secure: config.isProduction, sameSite: 'lax', path: '/', maxAge: GUEST_SESSION_MS })
   return { id, csrfToken, room, name, avatar }

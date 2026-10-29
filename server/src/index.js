@@ -20,7 +20,7 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      imgSrc: ["'self'", 'data:', 'https://i.pravatar.cc'],
+      imgSrc: ["'self'", 'data:'],
       connectSrc: ["'self'", 'ws:', 'wss:', 'https:'],
       mediaSrc: ["'self'", 'blob:'],
     },

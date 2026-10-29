@@ -4,8 +4,9 @@ import { Search, Hash, Send, Plus, Video, Smile, MessageSquare, ArrowLeft } from
 import { useApp } from '../store.jsx'
 import NameDialog from '../components/NameDialog.jsx'
 import { messageTime, toRoomId, newRoomId } from '../dates.js'
+import { initialsAvatar } from '../avatar.js'
 
-const fallbackAvatar = (seed) => `https://i.pravatar.cc/150?u=${encodeURIComponent(seed || 'user')}`
+const fallbackAvatar = (name) => initialsAvatar(name)
 const QUICK_EMOJI = ['😊', '👍', '🎉', '🙏', '🔥', '❤️', '😂', '✅']
 
 export default function TeamChat() {
@@ -47,7 +48,7 @@ export default function TeamChat() {
   }
   const avatarOf = (c) => {
     const other = state.contacts.find((u) => u.id === c?.members?.find((id) => id !== me))
-    return other?.avatar || c?.avatar || fallbackAvatar(c?.id)
+    return other?.avatar || c?.avatar || fallbackAvatar(other?.name || nameOf(c))
   }
 
   const term = search.trim().toLowerCase()
@@ -173,7 +174,7 @@ export default function TeamChat() {
             <div key={m.id} className={`flex gap-3 ${m.me ? 'flex-row-reverse' : ''} ${m.grouped ? 'mt-0.5' : 'mt-4'}`}>
               {m.grouped
                 ? <div className="w-9 shrink-0" />
-                : <img src={m.avatar || fallbackAvatar(m.userId || m.author)} alt="" className="w-9 h-9 rounded-full object-cover shrink-0" />}
+                : <img src={m.avatar || fallbackAvatar(m.author || m.userId)} alt="" className="w-9 h-9 rounded-full object-cover shrink-0" />}
               <div className={`max-w-[86%] sm:max-w-[70%] ${m.me ? 'items-end text-right' : ''} flex flex-col`}>
                 {!m.grouped && (
                   <div className={`flex items-center gap-2 mb-1 ${m.me ? 'flex-row-reverse' : ''}`}>

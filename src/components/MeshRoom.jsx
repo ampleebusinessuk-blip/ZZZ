@@ -14,11 +14,12 @@ import { rt } from '../realtime.js'
 import { messageTime } from '../dates.js'
 import { createGuestInviteLink } from '../invites.js'
 import { createEffectPipeline, BACKGROUNDS } from '../videoEffects.js'
+import { initialsAvatar } from '../avatar.js'
 
 // Fallback only. The real list is fetched per call so TURN credentials stay
 // short-lived; STUN alone cannot relay media between restrictive NATs.
 const FALLBACK_ICE = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }]
-const fallbackAvatar = (seed) => `https://i.pravatar.cc/150?u=${encodeURIComponent(seed || 'user')}`
+const fallbackAvatar = (name) => initialsAvatar(name)
 const EMOJIS = ['👍', '❤️', '😂', '🎉', '👏', '😮', '🙌', '🔥']
 
 export default function MeshRoom({ roomId: roomProp, onLeave }) {
@@ -882,7 +883,7 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
                   {msgs.length === 0 && <p className="text-white/40 text-sm text-center py-6">Messages here reach everyone in the call.</p>}
                   {msgs.map((m) => (
                     <div key={m.id} className="flex gap-2.5">
-                      <img src={m.avatar || fallbackAvatar(m.userId || m.author)} className="w-7 h-7 rounded-full shrink-0" alt="" />
+                      <img src={m.avatar || fallbackAvatar(m.author || m.userId)} className="w-7 h-7 rounded-full shrink-0" alt="" />
                       <div className="min-w-0">
                         <p className="text-xs text-white/50 mb-0.5">{m.me ? 'You' : m.author} · {messageTime(m.ts)}</p>
                         <p className="text-sm bg-white/5 rounded-lg px-3 py-2 inline-block break-words">{m.text}</p>

@@ -25,9 +25,6 @@ export function attachRealtime(server) {
   // reconnect re-sends join-room automatically and should slide straight back
   // in, not land the participant back in the lobby mid-call)
   const admittedByRoom = new Map()
-  // roomId -> true  (the host explicitly ended it — refuse every join from
-  // here on, including the host's own reconnect, until a new roomId is used)
-  const endedRooms = new Set()
   // boardId -> Set<ws>  (collaborative whiteboard rooms)
   const boards = new Map()
 
@@ -185,7 +182,6 @@ export function attachRealtime(server) {
         case 'join-room': {
           const { roomId } = msg
           if (!roomId) return
-          if (endedRooms.has(roomId)) return send(ws, { type: 'meeting-ended' })
           if (!rooms.has(roomId)) rooms.set(roomId, new Set())
 
           // The first signed-in member to reach an empty room starts it and is
@@ -233,14 +229,15 @@ export function attachRealtime(server) {
           }
           break
         }
-        // Host-only, and final: every current participant is dropped, anyone
-        // still waiting to be admitted is turned away, and the room refuses
-        // every join from here on rather than quietly reopening for the next
-        // person who follows the same link.
+        // Host-only: every current participant is dropped and anyone still
+        // waiting to be admitted is turned away, right now. The room itself
+        // isn't permanently killed — the same shared link (e.g. a Personal
+        // Meeting Room invite) should keep working for the next meeting, not
+        // go dead the first time someone ends a call with it. Whoever joins
+        // next just starts a fresh session, same as an empty room always has.
         case 'end-meeting': {
           const { roomId } = msg
           if (!roomId || meta.guest || roomHosts.get(roomId) !== meta.id) return send(ws, { type: 'error', error: 'host permission required' })
-          endedRooms.add(roomId)
           const room = rooms.get(roomId)
           if (room) for (const p of room) send(p, { type: 'meeting-ended' })
           const pending = pendingByRoom.get(roomId)

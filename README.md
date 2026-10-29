@@ -94,7 +94,11 @@ statement that this one room may be joined without an account.
 Redeeming it creates a **guest session**: a separate cookie, a separate table,
 a 12-hour life, and a room baked in. The room always comes from the signed pass,
 never from the request — so a guest cannot point their pass at another meeting.
-Invite links themselves expire after 7 days.
+The invite link itself never expires — it's meant to work as a permanent,
+share-anywhere link (e.g. for a Personal Meeting Room), not a one-off that
+goes stale after a week. A host ending a meeting drops everyone currently in
+it, but doesn't kill the link — the next person to use it just starts a fresh
+session, same as the room was always able to do when empty.
 
 Guests are refused at three layers, not one: REST routes sit behind the member
 gate, the WebSocket rejects any message outside their room, and member presence

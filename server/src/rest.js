@@ -8,6 +8,7 @@ import rateLimit from 'express-rate-limit'
 import { AccessToken } from 'livekit-server-sdk'
 import { q } from './db.js'
 import { config } from './config.js'
+import { initialsAvatar } from './avatar.js'
 import {
   registerUser, checkCredentials, createSession, clearSessionCookie, requireAuth, requireCsrf,
   publicUser, audit, createMfaChallenge, verifyMfaChallenge, verifyTotp, newMfaSecret,
@@ -271,7 +272,7 @@ router.post('/me/avatar', (req, res) => {
 
 router.delete('/me/avatar', (req, res) => {
   const stale = /^\/api\/avatars\/([0-9a-f-]{36}\.(?:jpg|png|webp))$/.exec(req.user.avatar || '')
-  q.updateAvatar.run(`https://i.pravatar.cc/150?u=${encodeURIComponent(req.user.email)}`, req.user.id)
+  q.updateAvatar.run(initialsAvatar(req.user.name), req.user.id)
   if (stale) { try { unlinkSync(join(AVATAR_DIR, stale[1])) } catch {} }
   res.json({ user: publicUser(q.userById.get(req.user.id)) })
 })
