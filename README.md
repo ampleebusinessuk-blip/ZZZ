@@ -1,4 +1,4 @@
-# Zoom17 — Full-Stack
+# Meet17 — Full-Stack
 
 A production-structured video meeting platform: React front-end + Node/Express API + WebSocket real-time layer + SQLite, with JWT auth, live chat & presence, and real WebRTC video.
 

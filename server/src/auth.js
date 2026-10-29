@@ -11,7 +11,7 @@ const digest = (value) => crypto.createHash('sha256').update(value).digest('hex'
 const COOKIE = config.isProduction ? '__Host-nexus_session' : 'nexus_session'
 // Guests get their own cookie so a guest session can never be mistaken for a
 // member session, and signing in as a member doesn't clobber a guest tab.
-const GUEST_COOKIE = config.isProduction ? '__Host-zoom17_guest' : 'zoom17_guest'
+const GUEST_COOKIE = config.isProduction ? '__Host-meet17_guest' : 'meet17_guest'
 const SESSION_MS = config.sessionDays * 24 * 60 * 60 * 1000
 const GUEST_SESSION_MS = 12 * 60 * 60 * 1000        // a guest pass lasts 12 hours
 const GUEST_INVITE_MS = 7 * 24 * 60 * 60 * 1000     // an invite link lasts 7 days

@@ -51,6 +51,6 @@ const server = http.createServer(app)
 attachRealtime(server)
 
 server.listen(config.port, () => {
-  console.log(`\n  ⚡ Zoom17 API on http://localhost:${config.port}`)
+  console.log(`\n  ⚡ Meet17 API on http://localhost:${config.port}`)
   console.log(`  🔌 WebSocket on ws://localhost:${config.port}/ws\n`)
 })

@@ -1,7 +1,7 @@
 import { BRAND } from '../brand.js'
 
 /*
-  Central Zoom17 wordmark renderer. The supplied transparent brand asset is used
+  Central Meet17 wordmark renderer. The supplied transparent brand asset is used
   everywhere; the vector fallback remains available if that asset is removed.
 */
 export default function Logo({ className = '', invert = false, height = 26, title = BRAND.name }) {

@@ -3,6 +3,7 @@ import { ArrowLeft, Check, Eye, EyeOff, KeyRound, Loader2, LockKeyhole, ShieldCh
 import { useAuth } from '../auth.jsx'
 import { api } from '../api.js'
 import Logo from '../components/Logo.jsx'
+import { BRAND } from '../brand.js'
 
 export default function Login() {
   const { login, register, verifyMfa } = useAuth()
@@ -74,7 +75,7 @@ export default function Login() {
               {notice && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-3 text-sm text-emerald-700">{notice}</div>}
               <button type="submit" disabled={busy} className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#1668e8] px-4 text-sm font-bold text-white shadow-lg shadow-blue-500/20 transition hover:bg-blue-700 disabled:opacity-60">{busy && <Loader2 className="h-4 w-4 animate-spin" />}{mode === 'login' ? 'Sign in securely' : mode === 'register' ? 'Create secure account' : mode === 'mfa' ? 'Verify and continue' : mode === 'reset' ? 'Update password' : 'Send reset link'}</button>
             </form>
-            {['login', 'register'].includes(mode) && <p className="mt-6 text-center text-sm text-ink-500">{mode === 'login' ? 'New to Zoom17? ' : 'Already have an account? '}<button onClick={() => switchMode(mode === 'login' ? 'register' : 'login')} className="font-bold text-blue-600 hover:underline">{mode === 'login' ? 'Create an account' : 'Sign in'}</button></p>}
+            {['login', 'register'].includes(mode) && <p className="mt-6 text-center text-sm text-ink-500">{mode === 'login' ? `New to ${BRAND.name}? ` : 'Already have an account? '}<button onClick={() => switchMode(mode === 'login' ? 'register' : 'login')} className="font-bold text-blue-600 hover:underline">{mode === 'login' ? 'Create an account' : 'Sign in'}</button></p>}
             <div className="mt-7 flex items-center justify-center gap-2 border-t border-ink-100 pt-5 text-xs text-ink-400"><LockKeyhole className="h-3.5 w-3.5" /> Protected by encrypted, revocable sessions</div>
           </div>
           <p className="mt-5 text-center text-xs text-ink-400">By continuing, you agree to the Terms and Privacy Policy.</p>

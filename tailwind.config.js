@@ -5,7 +5,7 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Zoom17 brand palette, sampled from the wordmark: bright blue for
+        // Meet17 brand palette, sampled from the wordmark: bright blue for
         // primary actions, deep navy for emphasis.
         brand: {
           blue: '#1A6CFF',

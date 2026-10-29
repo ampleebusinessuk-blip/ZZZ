@@ -192,7 +192,7 @@ router.post('/auth/change-password', (req, res) => {
 })
 router.post('/auth/mfa/setup', (req, res) => {
   const secret = newMfaSecret(); q.setMfa.run(secret, 0, req.user.id)
-  const issuer = encodeURIComponent('Zoom17'), account = encodeURIComponent(req.user.email)
+  const issuer = encodeURIComponent('Meet17'), account = encodeURIComponent(req.user.email)
   res.json({ secret, otpauthUrl: `otpauth://totp/${issuer}:${account}?secret=${secret}&issuer=${issuer}&algorithm=SHA1&digits=6&period=30` })
 })
 router.post('/auth/mfa/enable', (req, res) => {

@@ -1,4 +1,4 @@
-# Coolify Compose deployment for the Zoom17 full-stack app.
+# Coolify Compose deployment for the Meet17 full-stack app.
 #
 # Routing: Coolify attaches its own proxy network and generates Traefik labels,
 # so no external network is declared here. The `web` service (nginx) publishes
@@ -103,7 +103,7 @@ services:
     # parses as a blank flag and rejects with "CONFIG: Unknown argument:".
     command: >-
       -n --log-file=stdout
-      --realm=${TURN_REALM:-zoom17}
+      --realm=${TURN_REALM:-meet17}
       --use-auth-secret --static-auth-secret=${TURN_SECRET:-${JWT_SECRET}}
       --listening-ip=${TURN_PUBLIC_IP}
       --relay-ip=${TURN_PUBLIC_IP}
