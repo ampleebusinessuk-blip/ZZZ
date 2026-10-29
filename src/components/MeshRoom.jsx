@@ -71,6 +71,18 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
   const effectCanvasRef = useRef(null)
   const effectsCtrl = useRef(null)
   const effectTrackRef = useRef(null) // the canvas-captured video track sent when an effect is active
+  const pipelineCanvasRef = useRef(null) // which <canvas> element the pipeline is currently bound to
+  // Mirrors of state the callback refs below need to read without becoming
+  // stale closures (they're created once via useCallback, not re-created
+  // per render) — kept in sync by the small effects right after.
+  const camRef = useRef(true)
+  const sharingRef = useRef(false)
+  const bgEffectRef = useRef({ type: 'none' })
+  useEffect(() => { camRef.current = cam }, [cam])
+  useEffect(() => { sharingRef.current = sharing }, [sharing])
+  useEffect(() => {
+    bgEffectRef.current = bgEffect ? (bgEffect.type === 'blur' ? { type: 'blur', strength: 14 } : { type: 'image', bgId: bgEffect.bgId }) : { type: 'none' }
+  }, [bgEffect])
   const peers = useRef(new Map())   // peerId -> { pc, pending: [], polite, makingOffer, meta }
   const chatRef = useRef(null)
   const recorder = useRef(null)
@@ -285,7 +297,7 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
         // Always route the camera through the square-crop pipeline before it
         // ever reaches a peer or a recording — otherwise the live tile (CSS
         // object-fit) and the raw recorded track show different framing.
-        if (videoTrack && localVideoRef.current && effectCanvasRef.current) {
+        if (videoTrack && localVideoRef.current) {
           const videoEl = localVideoRef.current
           if (!(videoEl.videoWidth > 0)) {
             await new Promise((resolve) => {
@@ -293,13 +305,7 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
               videoEl.addEventListener('loadedmetadata', onReady)
             })
           }
-          if (!cancelled) {
-            effectsCtrl.current = createEffectPipeline(videoEl, effectCanvasRef.current)
-            effectsCtrl.current.start()
-            const track = effectCanvasRef.current.captureStream(30).getVideoTracks()[0]
-            track.enabled = wantVideo
-            effectTrackRef.current = track
-          }
+          if (!cancelled) ensurePipeline(wantVideo)
         }
       } else {
         setHasCamera(false); setCam(false)
@@ -480,6 +486,45 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
     // onnegotiationneeded renegotiate, instead of silently doing nothing.
     else if (track) pc.addTrack(track, screenStream.current || localStream.current)
   })
+
+  // (Re)binds the square-crop pipeline to whichever <video>/<canvas> pair is
+  // currently mounted. Needed as more than a one-time setup: a waiting-room
+  // participant's admission transition (lobby JSX -> main call JSX) is a
+  // structurally different React tree, so the video/canvas elements get
+  // unmounted and fresh ones mounted — without this, the pipeline kept
+  // reading a detached <video> and the canvas's captured track went stale,
+  // silently sending nothing. Both ref callbacks below call this on attach,
+  // and it no-ops if the canvas hasn't actually changed.
+  const ensurePipeline = useCallback((initialEnabled) => {
+    const videoEl = localVideoRef.current
+    const canvasEl = effectCanvasRef.current
+    if (!videoEl || !canvasEl || !localStream.current?.getVideoTracks().length) return
+    if (pipelineCanvasRef.current === canvasEl) return
+    pipelineCanvasRef.current = canvasEl
+
+    effectsCtrl.current?.stop()
+    effectsCtrl.current = createEffectPipeline(videoEl, canvasEl)
+    effectsCtrl.current.setEffect(bgEffectRef.current)
+    effectsCtrl.current.start()
+
+    const track = canvasEl.captureStream(30).getVideoTracks()[0]
+    track.enabled = initialEnabled ?? camRef.current
+    const oldTrack = effectTrackRef.current
+    effectTrackRef.current = track
+    if (!sharingRef.current) setVideoSenders(track)
+    oldTrack?.stop()
+  }, [])
+
+  const attachLocalVideo = useCallback((el) => {
+    localVideoRef.current = el
+    if (el && localStream.current) el.srcObject = localStream.current
+    ensurePipeline()
+  }, [ensurePipeline])
+
+  const attachEffectCanvas = useCallback((el) => {
+    effectCanvasRef.current = el
+    ensurePipeline()
+  }, [ensurePipeline])
 
   const stopShare = useCallback(() => {
     screenStream.current?.getTracks().forEach((t) => t.stop())
@@ -692,7 +737,7 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
       <div className="h-[100dvh] min-h-[100svh] w-screen bg-[#080B10] text-white flex flex-col items-center justify-center gap-6 px-6 text-center">
         {admission === 'waiting' && (
           <div className="relative w-full max-w-sm aspect-video rounded-2xl overflow-hidden bg-[#171B22] ring-1 ring-white/10 grid place-items-center">
-            <video ref={localVideoRef} autoPlay muted playsInline className={`w-full h-full bg-black object-cover ${showSelfVideo ? '' : 'hidden'} ${selfMirrored ? '-scale-x-100' : ''}`} />
+            <video ref={attachLocalVideo} autoPlay muted playsInline className={`w-full h-full bg-black object-cover ${showSelfVideo ? '' : 'hidden'} ${selfMirrored ? '-scale-x-100' : ''}`} />
             {!showSelfVideo && <img src={currentUser?.avatar} alt="You" className="w-20 h-20 rounded-full object-cover opacity-90" />}
             {mediaReady && (
               <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-2">
@@ -781,7 +826,7 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
             <div className={`overflow-hidden bg-[#171B22] grid place-items-center ring-1 ${mic ? 'ring-brand-blue/70' : 'ring-white/10'} ${count === 2 ? 'absolute z-10 top-3 right-3 h-[28%] min-h-[132px] w-[34%] rounded-2xl shadow-2xl sm:relative sm:top-auto sm:right-auto sm:h-auto sm:min-h-0 sm:w-auto sm:rounded-2xl sm:shadow-none' : 'relative min-h-0 rounded-none sm:rounded-2xl'}`}>
               {/* Screen share shows the raw stream as-is; the camera always goes through
                   the square-crop canvas below, so the live tile matches what's recorded. */}
-              <video ref={localVideoRef} autoPlay muted playsInline className={
+              <video ref={attachLocalVideo} autoPlay muted playsInline className={
                 showSelfVideo && sharing
                   ? `w-full h-full bg-black ${count === 2 ? 'object-cover sm:object-contain' : fitVideo ? 'object-contain' : 'object-cover'} ${selfMirrored ? '-scale-x-100' : ''}`
                   // `hidden` (display:none) makes Chromium pause a video element's
@@ -795,7 +840,7 @@ export default function MeshRoom({ roomId: roomProp, onLeave }) {
                   h-full to resolve against this grid's height silently produced an
                   oversized square box that the tile's overflow-hidden then clipped
                   back down to a wide slice, undoing the crop visually. */}
-              <canvas ref={effectCanvasRef} className={`max-w-full max-h-full aspect-square bg-black rounded-xl ${showSelfVideo && !sharing ? '' : 'hidden'} ${selfMirrored ? '-scale-x-100' : ''}`} />
+              <canvas ref={attachEffectCanvas} className={`max-w-full max-h-full aspect-square bg-black rounded-xl ${showSelfVideo && !sharing ? '' : 'hidden'} ${selfMirrored ? '-scale-x-100' : ''}`} />
               {!showSelfVideo && <img src={currentUser?.avatar} alt="You" className="w-24 h-24 rounded-full object-cover opacity-90" />}
               {handUp && <div className="absolute top-2 right-2 w-8 h-8 rounded-full bg-amber-400 text-black grid place-items-center text-lg">✋</div>}
               <div className="absolute bottom-2 left-2 flex items-center gap-1.5 px-2 py-1 rounded-lg bg-black/50 backdrop-blur text-xs">
